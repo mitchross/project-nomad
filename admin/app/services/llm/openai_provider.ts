@@ -194,6 +194,10 @@ export class OpenAIProvider implements LLMProvider {
     return false
   }
 
+  supportsNativeBenchmark(): boolean {
+    return false
+  }
+
   async checkModelHasThinking(_modelName: string): Promise<boolean> {
     // OpenAI-compatible servers don't expose capability metadata
     // Default to false — can be overridden via env config in the future

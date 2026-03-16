@@ -464,7 +464,7 @@ export class BenchmarkService {
         }
       }
 
-      if (provider.providerName === 'ollama') {
+      if (provider.supportsNativeBenchmark()) {
         // Ollama path: use native API for precise token metrics
         return await this._runOllamaAIBenchmark()
       }

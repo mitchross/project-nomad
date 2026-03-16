@@ -65,6 +65,13 @@ export interface LLMProvider {
   /** Whether this provider supports model pull/delete operations */
   supportsModelManagement(): boolean
 
+  /**
+   * Whether this provider supports the Ollama-native /api/generate benchmark path,
+   * which returns precise token counts and timing metrics.
+   * OpenAI-compatible providers fall back to wall-clock estimation.
+   */
+  supportsNativeBenchmark(): boolean
+
   /** Pull/download a model (Ollama only) */
   pullModel?(model: string, progressCallback?: (percent: number) => void): Promise<{ success: boolean; message: string }>
 

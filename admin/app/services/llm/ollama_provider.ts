@@ -115,6 +115,10 @@ export class OllamaProvider implements LLMProvider {
     return true
   }
 
+  supportsNativeBenchmark(): boolean {
+    return true
+  }
+
   async pullModel(model: string, progressCallback?: (percent: number) => void): Promise<{ success: boolean; message: string }> {
     try {
       const client = await this._ensureClient()
