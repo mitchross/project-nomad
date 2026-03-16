@@ -17,6 +17,7 @@ import KVStore from '#models/kv_store'
 import { ZIMExtractionService } from './zim_extraction_service.js'
 import { ZIM_BATCH_SIZE } from '../../constants/zim_extraction.js'
 import { ProcessAndEmbedFileResponse, ProcessZIMFileResponse, RAGResult, RerankedRAGResult } from '../../types/rag.js'
+import env from '#start/env'
 
 @inject()
 export class RagService {
@@ -25,16 +26,16 @@ export class RagService {
   private embeddingModelVerified = false
   public static UPLOADS_STORAGE_PATH = 'storage/kb_uploads'
   public static CONTENT_COLLECTION_NAME = 'nomad_knowledge_base'
-  public static EMBEDDING_MODEL = 'nomic-embed-text:v1.5'
-  public static EMBEDDING_DIMENSION = 768 // Nomic Embed Text v1.5 dimension is 768
+  public static EMBEDDING_MODEL = env.get('EMBEDDING_MODEL', 'nomic-embed-text:v1.5')
+  public static EMBEDDING_DIMENSION = parseInt(env.get('EMBEDDING_DIMENSIONS', '768')) // Nomic Embed Text v1.5 dimension is 768
   public static MODEL_CONTEXT_LENGTH = 2048 // nomic-embed-text has 2K token context
   public static MAX_SAFE_TOKENS = 1800 // Leave buffer for prefix and tokenization variance
   public static TARGET_TOKENS_PER_CHUNK = 1700 // Target 1700 tokens per chunk for embedding
   public static PREFIX_TOKEN_BUDGET = 10 // Reserve ~10 tokens for prefixes
   public static CHAR_TO_TOKEN_RATIO = 3 // Approximate chars per token
   // Nomic Embed Text v1.5 uses task-specific prefixes for optimal performance
-  public static SEARCH_DOCUMENT_PREFIX = 'search_document: '
-  public static SEARCH_QUERY_PREFIX = 'search_query: '
+  public static SEARCH_DOCUMENT_PREFIX = env.get('EMBEDDING_SEARCH_DOC_PREFIX', 'search_document: ')
+  public static SEARCH_QUERY_PREFIX = env.get('EMBEDDING_SEARCH_QUERY_PREFIX', 'search_query: ')
   public static EMBEDDING_BATCH_SIZE = 8 // Conservative batch size for low-end hardware
 
   constructor(
@@ -45,6 +46,12 @@ export class RagService {
   private async _initializeQdrantClient() {
     if (!this.qdrantInitPromise) {
       this.qdrantInitPromise = (async () => {
+        // Prefer QDRANT_HOST env var (K8s/BYO), fall back to Docker discovery
+        const qdrantHost = env.get('QDRANT_HOST', '')
+        if (qdrantHost) {
+          this.qdrant = new QdrantClient({ url: qdrantHost })
+          return
+        }
         const qdrantUrl = await this.dockerService.getServiceURL(SERVICE_NAMES.QDRANT)
         if (!qdrantUrl) {
           throw new Error('Qdrant service is not installed or running.')
@@ -285,8 +292,6 @@ export class RagService {
       // Extract text from chunk results
       const chunks = chunkResults.map((chunk) => chunk.text)
 
-      const ollamaClient = await this.ollamaService.getClient()
-
       // Prepare all chunk texts with prefix and truncation
       const prefixedChunks: string[] = []
       for (let i = 0; i < chunks.length; i++) {
@@ -320,10 +325,7 @@ export class RagService {
 
         logger.debug(`[RAG] Embedding batch ${batchIdx + 1}/${totalBatches} (${batch.length} chunks)`)
 
-        const response = await ollamaClient.embed({
-          model: RagService.EMBEDDING_MODEL,
-          input: batch,
-        })
+        const response = await this.ollamaService.embed(RagService.EMBEDDING_MODEL, batch)
 
         embeddings.push(...response.embeddings)
 
@@ -710,8 +712,6 @@ export class RagService {
       logger.debug(`[RAG] Extracted keywords: [${keywords.join(', ')}]`)
 
       // Generate embedding for the query with search_query prefix
-      const ollamaClient = await this.ollamaService.getClient()
-
       // Ensure query doesn't exceed token limit
       const prefixTokens = this.estimateTokenCount(RagService.SEARCH_QUERY_PREFIX)
       const maxQueryTokens = RagService.MAX_SAFE_TOKENS - prefixTokens
@@ -729,10 +729,7 @@ export class RagService {
         return []
       }
 
-      const response = await ollamaClient.embed({
-        model: RagService.EMBEDDING_MODEL,
-        input: [prefixedQuery],
-      })
+      const response = await this.ollamaService.embed(RagService.EMBEDDING_MODEL, [prefixedQuery])
 
       // Perform semantic search with a higher limit to enable reranking
       const searchLimit = limit * 3 // Get more results for reranking

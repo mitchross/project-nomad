@@ -443,78 +443,123 @@ export class BenchmarkService {
   }
 
   /**
-   * Run AI benchmark using Ollama
+   * Run AI benchmark using the configured LLM provider.
+   *
+   * For Ollama: uses the native /api/generate endpoint for precise token metrics.
+   * For OpenAI-compatible: uses /v1/chat/completions with wall-clock timing.
    */
   private async _runAIBenchmark(): Promise<AIScores> {
     try {
+      this._updateStatus('running_ai', 'Running AI benchmark...')
 
-    this._updateStatus('running_ai', 'Running AI benchmark...')
+      const { OllamaService } = await import('./ollama_service.js')
+      const ollamaService = new OllamaService()
+      const provider = ollamaService.provider
 
-    const ollamaAPIURL = await this.dockerService.getServiceURL(SERVICE_NAMES.OLLAMA)
-    if (!ollamaAPIURL) {
-      throw new Error('AI Assistant service location could not be determined. Ensure AI Assistant is installed and running.')
-    }
-
-    // Check if Ollama is available
-    try {
-      await axios.get(`${ollamaAPIURL}/api/tags`, { timeout: 5000 })
-    } catch (error) {
-      const errorCode = error.code || error.response?.status || 'unknown'
-      throw new Error(`Ollama is not running or not accessible (${errorCode}). Ensure AI Assistant is installed and running.`)
-    }
-
-    // Check if the benchmark model is available, pull if not
-    const ollamaService = new (await import('./ollama_service.js')).OllamaService()
-    const modelResponse = await ollamaService.downloadModel(AI_BENCHMARK_MODEL)
-    if (!modelResponse.success) {
-      throw new Error(`Model does not exist and failed to download: ${modelResponse.message}`)
-    }
-
-    // Run inference benchmark
-    const startTime = Date.now()
-
-      const response = await axios.post(
-        `${ollamaAPIURL}/api/generate`,
-        {
-          model: AI_BENCHMARK_MODEL,
-          prompt: AI_BENCHMARK_PROMPT,
-          stream: false,
-        },
-        { timeout: 120000 }
-      )
-
-      const endTime = Date.now()
-      const totalTime = (endTime - startTime) / 1000 // seconds
-
-      // Ollama returns eval_count (tokens generated) and eval_duration (nanoseconds)
-      if (response.data.eval_count && response.data.eval_duration) {
-        const tokenCount = response.data.eval_count
-        const evalDurationSeconds = response.data.eval_duration / 1e9
-        const tokensPerSecond = tokenCount / evalDurationSeconds
-
-        // Time to first token from prompt_eval_duration
-        const ttft = response.data.prompt_eval_duration
-          ? response.data.prompt_eval_duration / 1e6 // Convert to ms
-          : (totalTime * 1000) / 2 // Estimate if not available
-
-        return {
-          ai_tokens_per_second: Math.round(tokensPerSecond * 100) / 100,
-          ai_model_used: AI_BENCHMARK_MODEL,
-          ai_time_to_first_token: Math.round(ttft * 100) / 100,
+      // Try to download the benchmark model (only works for Ollama)
+      if (provider.supportsModelManagement()) {
+        const modelResponse = await ollamaService.downloadModel(AI_BENCHMARK_MODEL)
+        if (!modelResponse.success) {
+          throw new Error(`Model does not exist and failed to download: ${modelResponse.message}`)
         }
       }
 
-      // Fallback calculation
-      const estimatedTokens = response.data.response?.split(' ').length * 1.3 || 100
-      const tokensPerSecond = estimatedTokens / totalTime
+      if (provider.providerName === 'ollama') {
+        // Ollama path: use native API for precise token metrics
+        return await this._runOllamaAIBenchmark()
+      }
+
+      // OpenAI-compatible path: use chat completions with wall-clock timing
+      return await this._runOpenAIAIBenchmark(ollamaService)
+    } catch (error) {
+      throw new Error(`AI benchmark failed: ${(error as Error).message}`)
+    }
+  }
+
+  /** Ollama-specific benchmark using /api/generate for precise metrics */
+  private async _runOllamaAIBenchmark(): Promise<AIScores> {
+    const ollamaAPIURL = await this.dockerService.getServiceURL(SERVICE_NAMES.OLLAMA)
+    if (!ollamaAPIURL) {
+      // Try LLM_HOST env var
+      const { default: env } = await import('#start/env')
+      const host = env.get('LLM_HOST') || env.get('OLLAMA_HOST')
+      if (!host) {
+        throw new Error('AI Assistant service location could not be determined.')
+      }
+      return this._runOllamaAIBenchmarkWithURL(host)
+    }
+    return this._runOllamaAIBenchmarkWithURL(ollamaAPIURL)
+  }
+
+  private async _runOllamaAIBenchmarkWithURL(ollamaAPIURL: string): Promise<AIScores> {
+    const startTime = Date.now()
+
+    const response = await axios.post(
+      `${ollamaAPIURL}/api/generate`,
+      {
+        model: AI_BENCHMARK_MODEL,
+        prompt: AI_BENCHMARK_PROMPT,
+        stream: false,
+      },
+      { timeout: 120000 }
+    )
+
+    const endTime = Date.now()
+    const totalTime = (endTime - startTime) / 1000
+
+    if (response.data.eval_count && response.data.eval_duration) {
+      const tokenCount = response.data.eval_count
+      const evalDurationSeconds = response.data.eval_duration / 1e9
+      const tokensPerSecond = tokenCount / evalDurationSeconds
+
+      const ttft = response.data.prompt_eval_duration
+        ? response.data.prompt_eval_duration / 1e6
+        : (totalTime * 1000) / 2
 
       return {
         ai_tokens_per_second: Math.round(tokensPerSecond * 100) / 100,
         ai_model_used: AI_BENCHMARK_MODEL,
-        ai_time_to_first_token: Math.round((totalTime * 1000) / 2),
+        ai_time_to_first_token: Math.round(ttft * 100) / 100,
       }
-    } catch (error) {
-      throw new Error(`AI benchmark failed: ${error.message}`)
+    }
+
+    const estimatedTokens = response.data.response?.split(' ').length * 1.3 || 100
+    const tokensPerSecond = estimatedTokens / totalTime
+
+    return {
+      ai_tokens_per_second: Math.round(tokensPerSecond * 100) / 100,
+      ai_model_used: AI_BENCHMARK_MODEL,
+      ai_time_to_first_token: Math.round((totalTime * 1000) / 2),
+    }
+  }
+
+  /** OpenAI-compatible benchmark using chat completions with wall-clock timing */
+  private async _runOpenAIAIBenchmark(ollamaService: InstanceType<typeof import('./ollama_service.js').OllamaService>): Promise<AIScores> {
+    // Use the first available model for benchmarking
+    const models = await ollamaService.getModels()
+    const benchModel = models.find(m => m.name === AI_BENCHMARK_MODEL)?.name || models[0]?.name
+    if (!benchModel) {
+      throw new Error('No models available for AI benchmark.')
+    }
+
+    const startTime = Date.now()
+
+    const result = await ollamaService.chat({
+      model: benchModel,
+      messages: [{ role: 'user' as const, content: AI_BENCHMARK_PROMPT }],
+    })
+
+    const endTime = Date.now()
+    const totalTime = (endTime - startTime) / 1000
+
+    // Estimate tokens from response content (rough: ~1.3 tokens per word)
+    const estimatedTokens = result.message.content.split(' ').length * 1.3
+    const tokensPerSecond = estimatedTokens / totalTime
+
+    return {
+      ai_tokens_per_second: Math.round(tokensPerSecond * 100) / 100,
+      ai_model_used: benchModel,
+      ai_time_to_first_token: Math.round((totalTime * 1000) / 2), // Estimated
     }
   }
 

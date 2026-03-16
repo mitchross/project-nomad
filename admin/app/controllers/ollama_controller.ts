@@ -7,7 +7,7 @@ import { inject } from '@adonisjs/core'
 import type { HttpContext } from '@adonisjs/core/http'
 import { DEFAULT_QUERY_REWRITE_MODEL, RAG_CONTEXT_LIMITS, SYSTEM_PROMPTS } from '../../constants/ollama.js'
 import logger from '@adonisjs/core/services/logger'
-import type { Message } from 'ollama'
+import type { ChatMessage } from '../services/llm/llm_provider.js'
 
 @inject()
 export default class OllamaController {
@@ -213,7 +213,7 @@ export default class OllamaController {
   }
 
   private async rewriteQueryWithContext(
-    messages: Message[]
+    messages: ChatMessage[]
   ): Promise<string | null> {
     try {
       // Get recent conversation history (last 6 messages for 3 turns)
@@ -250,11 +250,11 @@ export default class OllamaController {
         model: DEFAULT_QUERY_REWRITE_MODEL,
         messages: [
           {
-            role: 'system',
+            role: 'system' as const,
             content: SYSTEM_PROMPTS.query_rewrite,
           },
           {
-            role: 'user',
+            role: 'user' as const,
             content: `Conversation:\n${conversationContext}\n\nRewritten Query:`,
           },
         ],

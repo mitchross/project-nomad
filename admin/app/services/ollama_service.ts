@@ -1,5 +1,4 @@
 import { inject } from '@adonisjs/core'
-import { ChatRequest, Ollama } from 'ollama'
 import { NomadOllamaModel } from '../../types/ollama.js'
 import { FALLBACK_RECOMMENDED_OLLAMA_MODELS } from '../../constants/ollama.js'
 import fs from 'node:fs/promises'
@@ -7,12 +6,13 @@ import path from 'node:path'
 import logger from '@adonisjs/core/services/logger'
 import axios from 'axios'
 import { DownloadModelJob } from '#jobs/download_model_job'
-import { SERVICE_NAMES } from '../../constants/service_names.js'
 import transmit from '@adonisjs/transmit/services/main'
 import Fuse, { IFuseOptions } from 'fuse.js'
 import { BROADCAST_CHANNELS } from '../../constants/broadcast.js'
 import env from '#start/env'
 import { NOMAD_API_DEFAULT_BASE_URL } from '../../constants/misc.js'
+import { createLLMProvider } from './llm/provider_factory.js'
+import type { LLMProvider, ChatRequest as LLMChatRequest } from './llm/llm_provider.js'
 
 const NOMAD_MODELS_API_PATH = '/api/v1/ollama/models'
 const MODELS_CACHE_FILE = path.join(process.cwd(), 'storage', 'ollama-models-cache.json')
@@ -20,81 +20,45 @@ const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 hours
 
 @inject()
 export class OllamaService {
-  private ollama: Ollama | null = null
-  private ollamaInitPromise: Promise<void> | null = null
+  private _provider: LLMProvider | null = null
 
   constructor() { }
 
-  private async _initializeOllamaClient() {
-    if (!this.ollamaInitPromise) {
-      this.ollamaInitPromise = (async () => {
-        const dockerService = new (await import('./docker_service.js')).DockerService()
-        const qdrantUrl = await dockerService.getServiceURL(SERVICE_NAMES.OLLAMA)
-        if (!qdrantUrl) {
-          throw new Error('Ollama service is not installed or running.')
-        }
-        this.ollama = new Ollama({ host: qdrantUrl })
-      })()
+  /** Lazily creates the LLM provider singleton */
+  public get provider(): LLMProvider {
+    if (!this._provider) {
+      this._provider = createLLMProvider()
     }
-    return this.ollamaInitPromise
-  }
-
-  private async _ensureDependencies() {
-    if (!this.ollama) {
-      await this._initializeOllamaClient()
-    }
+    return this._provider
   }
 
   /**
-   * Downloads a model from the Ollama service with progress tracking. Where possible,
-   * one should dispatch a background job instead of calling this method directly to avoid long blocking.
-   * @param model Model name to download
-   * @returns Success status and message
+   * Downloads a model with progress tracking. Only works with providers that
+   * support model management (Ollama). For OpenAI-compatible providers, returns
+   * a message indicating that model management is not supported.
    */
   async downloadModel(model: string, progressCallback?: (percent: number) => void): Promise<{ success: boolean; message: string }> {
-    try {
-      await this._ensureDependencies()
-      if (!this.ollama) {
-        throw new Error('Ollama client is not initialized.')
-      }
-
-      // See if model is already installed
-      const installedModels = await this.getModels()
-      if (installedModels && installedModels.some((m) => m.name === model)) {
-        logger.info(`[OllamaService] Model "${model}" is already installed.`)
-        return { success: true, message: 'Model is already installed.' }
-      }
-
-      // Returns AbortableAsyncIterator<ProgressResponse>
-      const downloadStream = await this.ollama.pull({
-        model,
-        stream: true,
-      })
-
-      for await (const chunk of downloadStream) {
-        if (chunk.completed && chunk.total) {
-          const percent = ((chunk.completed / chunk.total) * 100).toFixed(2)
-          const percentNum = parseFloat(percent)
-
-          this.broadcastDownloadProgress(model, percentNum)
-          if (progressCallback) {
-            progressCallback(percentNum)
-          }
-        }
-      }
-
-      logger.info(`[OllamaService] Model "${model}" downloaded successfully.`)
-      return { success: true, message: 'Model downloaded successfully.' }
-    } catch (error) {
-      logger.error(
-        `[OllamaService] Failed to download model "${model}": ${error instanceof Error ? error.message : error
-        }`
-      )
-      return { success: false, message: 'Failed to download model.' }
+    if (!this.provider.supportsModelManagement() || !this.provider.pullModel) {
+      return { success: false, message: 'Model management is not supported by the current LLM provider.' }
     }
+
+    const wrappedCallback = progressCallback
+      ? (percent: number) => {
+        this.broadcastDownloadProgress(model, percent)
+        progressCallback(percent)
+      }
+      : (percent: number) => {
+        this.broadcastDownloadProgress(model, percent)
+      }
+
+    return this.provider.pullModel(model, wrappedCallback)
   }
 
   async dispatchModelDownload(modelName: string): Promise<{ success: boolean; message: string }> {
+    if (!this.provider.supportsModelManagement()) {
+      return { success: false, message: 'Model management is not supported by the current LLM provider.' }
+    }
+
     try {
       logger.info(`[OllamaService] Dispatching model download for ${modelName} via job queue`)
 
@@ -118,68 +82,38 @@ export class OllamaService {
     }
   }
 
-  public async getClient() {
-    await this._ensureDependencies()
-    return this.ollama!
+  public async chat(chatRequest: LLMChatRequest) {
+    return await this.provider.chat(chatRequest)
   }
 
-  public async chat(chatRequest: ChatRequest & { stream?: boolean }) {
-    await this._ensureDependencies()
-    if (!this.ollama) {
-      throw new Error('Ollama client is not initialized.')
-    }
-    return await this.ollama.chat({
-      ...chatRequest,
-      stream: false,
-    })
-  }
-
-  public async chatStream(chatRequest: ChatRequest) {
-    await this._ensureDependencies()
-    if (!this.ollama) {
-      throw new Error('Ollama client is not initialized.')
-    }
-    return await this.ollama.chat({
-      ...chatRequest,
-      stream: true,
-    })
+  public async chatStream(chatRequest: LLMChatRequest) {
+    return await this.provider.chatStream(chatRequest)
   }
 
   public async checkModelHasThinking(modelName: string): Promise<boolean> {
-    await this._ensureDependencies()
-    if (!this.ollama) {
-      throw new Error('Ollama client is not initialized.')
+    if (this.provider.checkModelHasThinking) {
+      return this.provider.checkModelHasThinking(modelName)
     }
-
-    const modelInfo = await this.ollama.show({
-      model: modelName,
-    })
-
-    return modelInfo.capabilities.includes('thinking')
+    return false
   }
 
   public async deleteModel(modelName: string) {
-    await this._ensureDependencies()
-    if (!this.ollama) {
-      throw new Error('Ollama client is not initialized.')
+    if (!this.provider.supportsModelManagement() || !this.provider.deleteModel) {
+      throw new Error('Model management is not supported by the current LLM provider.')
     }
-
-    return await this.ollama.delete({
-      model: modelName,
-    })
+    return await this.provider.deleteModel(modelName)
   }
 
   public async getModels(includeEmbeddings = false) {
-    await this._ensureDependencies()
-    if (!this.ollama) {
-      throw new Error('Ollama client is not initialized.')
-    }
-    const response = await this.ollama.list()
-    if (includeEmbeddings) {
-      return response.models
-    }
-    // Filter out embedding models
-    return response.models.filter((model) => !model.name.includes('embed'))
+    return await this.provider.listModels(includeEmbeddings)
+  }
+
+  /**
+   * Embed text using the LLM provider. Convenience wrapper for the provider's
+   * embed method, used by RagService.
+   */
+  public async embed(model: string, input: string[]) {
+    return await this.provider.embed(model, input)
   }
 
   async getAvailableModels(

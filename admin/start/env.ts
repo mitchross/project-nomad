@@ -60,4 +60,36 @@ export default await Env.create(new URL('../', import.meta.url), {
   |----------------------------------------------------------
   */
   NOMAD_API_URL: Env.schema.string.optional(),
+
+  /*
+  |----------------------------------------------------------
+  | Variables for configuring the LLM provider
+  |----------------------------------------------------------
+  */
+  LLM_PROVIDER: Env.schema.enum.optional(['ollama', 'openai'] as const),
+  LLM_HOST: Env.schema.string.optional(),
+  LLM_API_KEY: Env.schema.string.optional(),
+  OLLAMA_HOST: Env.schema.string.optional(),
+
+  /*
+  |----------------------------------------------------------
+  | Variables for configuring embeddings (RAG)
+  |----------------------------------------------------------
+  */
+  EMBEDDING_MODEL: Env.schema.string.optional(),
+  EMBEDDING_DIMENSIONS: Env.schema.string.optional(),
+  EMBEDDING_SEARCH_DOC_PREFIX: Env.schema.string.optional(),
+  EMBEDDING_SEARCH_QUERY_PREFIX: Env.schema.string.optional(),
+  QDRANT_HOST: Env.schema.string.optional(),
+
+  /*
+  |----------------------------------------------------------
+  | Variables for companion service URLs (BYO pattern)
+  |----------------------------------------------------------
+  */
+  KIWIX_URL: Env.schema.string.optional(),
+  KOLIBRI_URL: Env.schema.string.optional(),
+  PROTOMAPS_URL: Env.schema.string.optional(),
+  CYBERCHEF_URL: Env.schema.string.optional(),
+  FLATNOTES_URL: Env.schema.string.optional(),
 })
