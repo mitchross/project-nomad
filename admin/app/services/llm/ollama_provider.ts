@@ -82,8 +82,21 @@ export class OllamaProvider implements LLMProvider {
       think: request.think as any,
       options: request.options,
     })
-    // The Ollama SDK returns an AbortableAsyncIterator which is already AsyncIterable
-    return stream as any
+
+    // Map Ollama SDK ChatResponse chunks to our ChatStreamChunk interface
+    async function* mapChunks(): AsyncIterable<ChatStreamChunk> {
+      for await (const chunk of stream) {
+        yield {
+          message: {
+            role: chunk.message?.role,
+            content: chunk.message?.content,
+          },
+          done: chunk.done,
+        }
+      }
+    }
+
+    return mapChunks()
   }
 
   async embed(model: string, input: string[]): Promise<EmbeddingResult> {

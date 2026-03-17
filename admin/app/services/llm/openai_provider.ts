@@ -57,6 +57,9 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     const data = await response.json() as any
+    if (!data.choices?.length || !data.choices[0].message) {
+      throw new Error('Unexpected response format from OpenAI API: no choices returned')
+    }
     return {
       message: {
         role: data.choices[0].message.role,
@@ -84,7 +87,10 @@ export class OpenAIProvider implements LLMProvider {
       throw new Error(`OpenAI API error ${response.status}: ${text}`)
     }
 
-    const reader = response.body!.getReader()
+    if (!response.body) {
+      throw new Error('Stream response body is empty')
+    }
+    const reader = response.body.getReader()
     const decoder = new TextDecoder()
 
     return {
@@ -169,7 +175,7 @@ export class OpenAIProvider implements LLMProvider {
       })
 
       if (!response.ok) {
-        logger.warn(`[OpenAIProvider] Failed to list models: ${response.status}`)
+        logger.warn(`[OpenAIProvider] Failed to list models from ${this.baseURL}/models: ${response.status}`)
         return []
       }
 
