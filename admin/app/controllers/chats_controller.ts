@@ -4,6 +4,7 @@ import { ChatService } from '#services/chat_service'
 import { createSessionSchema, updateSessionSchema, addMessageSchema } from '#validators/chat'
 import KVStore from '#models/kv_store'
 import { SystemService } from '#services/system_service'
+import { DockerService } from '#services/docker_service'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
 
 @inject()
@@ -11,7 +12,11 @@ export default class ChatsController {
   constructor(private chatService: ChatService, private systemService: SystemService) {}
 
   async inertia({ inertia, response }: HttpContext) {
-    const aiAssistantInstalled = await this.systemService.checkServiceInstalled(SERVICE_NAMES.OLLAMA)
+    // In K8s mode, the LLM is available if LLM_HOST is configured (checked during service sync)
+    // In Docker mode, check if the Ollama container is installed
+    const aiAssistantInstalled = DockerService.isKubernetesMode()
+      ? !!process.env.LLM_HOST
+      : await this.systemService.checkServiceInstalled(SERVICE_NAMES.OLLAMA)
     if (!aiAssistantInstalled) {
       return response.status(404).json({ error: 'AI Assistant service not installed' })
     }

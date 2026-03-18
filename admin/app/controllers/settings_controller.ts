@@ -51,8 +51,13 @@ export default class SettingsController {
     }
 
     async models({ inertia }: HttpContext) {
-        const availableModels = await this.ollamaService.getAvailableModels({ sort: 'pulls', recommendedOnly: false, query: null, limit: 15 });
-        const installedModels = await this.ollamaService.getModels();
+        // Only fetch the Ollama model catalog if the provider supports model management
+        // (i.e. Ollama). For OpenAI-compatible providers, model installation is external.
+        const supportsModelMgmt = this.ollamaService.provider.supportsModelManagement()
+        const availableModels = supportsModelMgmt
+            ? await this.ollamaService.getAvailableModels({ sort: 'pulls', recommendedOnly: false, query: null, limit: 15 })
+            : null
+        const installedModels = await this.ollamaService.getModels()
         const chatSuggestionsEnabled = await KVStore.getValue('chat.suggestionsEnabled')
         const aiAssistantCustomName = await KVStore.getValue('ai.assistantCustomName')
         return inertia.render('settings/models', {
@@ -64,7 +69,7 @@ export default class SettingsController {
                     aiAssistantCustomName: aiAssistantCustomName ?? '',
                 }
             }
-        });
+        })
     }
 
     async update({ inertia }: HttpContext) {

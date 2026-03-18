@@ -49,7 +49,8 @@ const SYSBENCH_IMAGE = 'severalnines/sysbench:latest'
 const SYSBENCH_CONTAINER_NAME = 'nomad_benchmark_sysbench'
 
 // Reference model for AI benchmark - small but meaningful
-const AI_BENCHMARK_MODEL = 'llama3.2:1b'
+// Configurable via env for non-Ollama deployments (e.g. llama-cpp serving qwen3.5)
+const AI_BENCHMARK_MODEL = process.env.AI_BENCHMARK_MODEL || 'llama3.2:1b'
 const AI_BENCHMARK_PROMPT = 'Explain recursion in programming in exactly 100 words.'
 
 // Reference scores for normalization (calibrated to 0-100 scale)

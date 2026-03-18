@@ -497,7 +497,10 @@ export class SystemService {
 
       for (const service of allServices) {
         const envVar = serviceEnvMap[service.service_name]
-        const isAvailable = envVar ? !!process.env[envVar] : false
+        // For Ollama/LLM, also check OLLAMA_HOST as a fallback
+        const isAvailable = envVar
+          ? !!process.env[envVar] || (service.service_name === SERVICE_NAMES.OLLAMA && !!process.env.OLLAMA_HOST)
+          : false
 
         if (isAvailable && !service.installed) {
           logger.info(

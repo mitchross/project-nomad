@@ -70,6 +70,7 @@ export default await Env.create(new URL('../', import.meta.url), {
   LLM_HOST: Env.schema.string.optional(),
   LLM_API_KEY: Env.schema.string.optional(),
   OLLAMA_HOST: Env.schema.string.optional(),
+  AI_BENCHMARK_MODEL: Env.schema.string.optional(),
 
   /*
   |----------------------------------------------------------
