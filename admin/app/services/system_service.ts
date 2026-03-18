@@ -68,6 +68,10 @@ export class SystemService {
   }
 
   async getNvidiaSmiInfo(): Promise<Array<{ vendor: string; model: string; vram: number; }> | { error: string } | 'OLLAMA_NOT_FOUND' | 'BAD_RESPONSE' | 'UNKNOWN_ERROR'> {
+    if (DockerService.isKubernetesMode()) {
+      return 'OLLAMA_NOT_FOUND'
+    }
+
     try {
       const containers = await this.dockerService.docker.listContainers({ all: false })
       const ollamaContainer = containers.find((c) =>
@@ -249,50 +253,53 @@ export class SystemService {
 
       // Query Docker API for host-level info (hostname, OS, GPU runtime)
       // si.osInfo() returns the container's info inside Docker, not the host's
-      try {
-        const dockerInfo = await this.dockerService.docker.info()
+      // In Kubernetes mode, skip Docker enrichment entirely — there's no Docker socket.
+      if (!DockerService.isKubernetesMode()) {
+        try {
+          const dockerInfo = await this.dockerService.docker.info()
 
-        if (dockerInfo.Name) {
-          os.hostname = dockerInfo.Name
-        }
-        if (dockerInfo.OperatingSystem) {
-          os.distro = dockerInfo.OperatingSystem
-        }
-        if (dockerInfo.KernelVersion) {
-          os.kernel = dockerInfo.KernelVersion
-        }
-
-        // If si.graphics() returned no controllers (common inside Docker),
-        // fall back to nvidia runtime + nvidia-smi detection
-        if (!graphics.controllers || graphics.controllers.length === 0) {
-          const runtimes = dockerInfo.Runtimes || {}
-          if ('nvidia' in runtimes) {
-            gpuHealth.hasNvidiaRuntime = true
-            const nvidiaInfo = await this.getNvidiaSmiInfo()
-            if (Array.isArray(nvidiaInfo)) {
-              graphics.controllers = nvidiaInfo.map((gpu) => ({
-                model: gpu.model,
-                vendor: gpu.vendor,
-                bus: "",
-                vram: gpu.vram,
-                vramDynamic: false, // assume false here, we don't actually use this field for our purposes.
-              }))
-              gpuHealth.status = 'ok'
-              gpuHealth.ollamaGpuAccessible = true
-            } else if (nvidiaInfo === 'OLLAMA_NOT_FOUND') {
-              gpuHealth.status = 'ollama_not_installed'
-            } else {
-              gpuHealth.status = 'passthrough_failed'
-              logger.warn(`NVIDIA runtime detected but GPU passthrough failed: ${typeof nvidiaInfo === 'string' ? nvidiaInfo : JSON.stringify(nvidiaInfo)}`)
-            }
+          if (dockerInfo.Name) {
+            os.hostname = dockerInfo.Name
           }
-        } else {
-          // si.graphics() returned controllers (host install, not Docker) — GPU is working
-          gpuHealth.status = 'ok'
-          gpuHealth.ollamaGpuAccessible = true
+          if (dockerInfo.OperatingSystem) {
+            os.distro = dockerInfo.OperatingSystem
+          }
+          if (dockerInfo.KernelVersion) {
+            os.kernel = dockerInfo.KernelVersion
+          }
+
+          // If si.graphics() returned no controllers (common inside Docker),
+          // fall back to nvidia runtime + nvidia-smi detection
+          if (!graphics.controllers || graphics.controllers.length === 0) {
+            const runtimes = dockerInfo.Runtimes || {}
+            if ('nvidia' in runtimes) {
+              gpuHealth.hasNvidiaRuntime = true
+              const nvidiaInfo = await this.getNvidiaSmiInfo()
+              if (Array.isArray(nvidiaInfo)) {
+                graphics.controllers = nvidiaInfo.map((gpu) => ({
+                  model: gpu.model,
+                  vendor: gpu.vendor,
+                  bus: "",
+                  vram: gpu.vram,
+                  vramDynamic: false, // assume false here, we don't actually use this field for our purposes.
+                }))
+                gpuHealth.status = 'ok'
+                gpuHealth.ollamaGpuAccessible = true
+              } else if (nvidiaInfo === 'OLLAMA_NOT_FOUND') {
+                gpuHealth.status = 'ollama_not_installed'
+              } else {
+                gpuHealth.status = 'passthrough_failed'
+                logger.warn(`NVIDIA runtime detected but GPU passthrough failed: ${typeof nvidiaInfo === 'string' ? nvidiaInfo : JSON.stringify(nvidiaInfo)}`)
+              }
+            }
+          } else {
+            // si.graphics() returned controllers (host install, not Docker) — GPU is working
+            gpuHealth.status = 'ok'
+            gpuHealth.ollamaGpuAccessible = true
+          }
+        } catch {
+          // Docker info query failed, skip host-level enrichment
         }
-      } catch {
-        // Docker info query failed, skip host-level enrichment
       }
 
       return {
@@ -423,8 +430,16 @@ export class SystemService {
    * It will mark services as not installed if their corresponding containers do not exist, regardless of their running state.
    * Handles cases where a container might have been manually removed, ensuring the database reflects the actual existence of containers.
    * Containers that exist but are stopped, paused, or restarting will still be considered installed.
+   *
+   * In Kubernetes mode, there is no Docker socket. Instead, services are considered
+   * installed if their corresponding URL environment variable is configured, since
+   * companion services are deployed as separate K8s pods.
    */
   private async _syncContainersWithDatabase() {
+    if (DockerService.isKubernetesMode()) {
+      return this._syncServicesForKubernetes()
+    }
+
     try {
       const allServices = await Service.all()
       const serviceStatusList = await this.dockerService.getServicesStatus()
@@ -458,6 +473,43 @@ export class SystemService {
       }
     } catch (error) {
       logger.error('Error syncing containers with database:', error)
+    }
+  }
+
+  /**
+   * In Kubernetes, companion services are deployed as separate pods. We detect
+   * which ones are available by checking if their URL environment variable is set.
+   * The LLM provider (Ollama/llama-cpp) is detected via LLM_HOST or OLLAMA_HOST.
+   */
+  private async _syncServicesForKubernetes() {
+    // Map service names to the env var that indicates they're deployed
+    const serviceEnvMap: Record<string, string> = {
+      [SERVICE_NAMES.KIWIX]: 'KIWIX_URL',
+      [SERVICE_NAMES.KOLIBRI]: 'KOLIBRI_URL',
+      [SERVICE_NAMES.CYBERCHEF]: 'CYBERCHEF_URL',
+      [SERVICE_NAMES.FLATNOTES]: 'FLATNOTES_URL',
+      [SERVICE_NAMES.QDRANT]: 'QDRANT_HOST',
+      [SERVICE_NAMES.OLLAMA]: 'LLM_HOST',
+    }
+
+    try {
+      const allServices = await Service.all()
+
+      for (const service of allServices) {
+        const envVar = serviceEnvMap[service.service_name]
+        const isAvailable = envVar ? !!process.env[envVar] : false
+
+        if (isAvailable && !service.installed) {
+          logger.info(
+            `K8s mode: marking ${service.service_name} as installed (${envVar} is set)`
+          )
+          service.installed = true
+          service.installation_status = 'idle'
+          await service.save()
+        }
+      }
+    } catch (error) {
+      logger.error('Error syncing services for Kubernetes:', error)
     }
   }
 

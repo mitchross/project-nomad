@@ -19,7 +19,24 @@ export class DockerService {
   private activeInstallations: Set<string> = new Set()
   public static NOMAD_NETWORK = 'project-nomad_default'
 
+  /**
+   * Returns true if running inside Kubernetes (no Docker socket available).
+   * In K8s mode, companion services are deployed as separate pods and managed
+   * via environment variables (URL config), not via the Docker API.
+   */
+  public static isKubernetesMode(): boolean {
+    return !!process.env.KUBERNETES_SERVICE_HOST
+  }
+
   constructor() {
+    if (DockerService.isKubernetesMode()) {
+      // In Kubernetes, there's no Docker socket. Create a dummy instance
+      // that won't be used — all Docker calls are guarded by isKubernetesMode().
+      this.docker = new Docker({ socketPath: '/dev/null' })
+      logger.info('Running in Kubernetes mode — Docker service management disabled')
+      return
+    }
+
     // Support both Linux (production) and Windows (development with Docker Desktop)
     const isWindows = process.platform === 'win32'
     if (isWindows) {
@@ -109,6 +126,16 @@ export class DockerService {
       status: string
     }[]
   > {
+    // In Kubernetes, services are managed as separate pods — report all
+    // installed services as "running" since K8s handles their lifecycle.
+    if (DockerService.isKubernetesMode()) {
+      const services = await Service.query().where('installed', true)
+      return services.map((s) => ({
+        service_name: s.service_name,
+        status: 'running',
+      }))
+    }
+
     try {
       const containers = await this.docker.listContainers({ all: true })
       const containerMap = new Map<string, Docker.ContainerInfo>()

@@ -1,9 +1,9 @@
-import { DockerService } from '#services/docker_service';
+import { DockerService } from '#services/docker_service'
 import { SystemService } from '#services/system_service'
 import { SystemUpdateService } from '#services/system_update_service'
 import { ContainerRegistryService } from '#services/container_registry_service'
 import { CheckServiceUpdatesJob } from '#jobs/check_service_updates_job'
-import { affectServiceValidator, checkLatestVersionValidator, installServiceValidator, subscribeToReleaseNotesValidator, updateServiceValidator } from '#validators/system';
+import { affectServiceValidator, checkLatestVersionValidator, installServiceValidator, subscribeToReleaseNotesValidator, updateServiceValidator } from '#validators/system'
 import { inject } from '@adonisjs/core'
 import type { HttpContext } from '@adonisjs/core/http'
 
@@ -29,24 +29,32 @@ export default class SystemController {
     }
 
     async installService({ request, response }: HttpContext) {
-        const payload = await request.validateUsing(installServiceValidator);
+        if (DockerService.isKubernetesMode()) {
+            return response.status(501).send({ error: 'Service installation is managed by Kubernetes' })
+        }
 
-        const result = await this.dockerService.createContainerPreflight(payload.service_name);
+        const payload = await request.validateUsing(installServiceValidator)
+
+        const result = await this.dockerService.createContainerPreflight(payload.service_name)
         if (result.success) {
-            response.send({ success: true, message: result.message });
+            response.send({ success: true, message: result.message })
         } else {
-            response.status(400).send({ error: result.message });
+            response.status(400).send({ error: result.message })
         }
     }
 
     async affectService({ request, response }: HttpContext) {
-        const payload = await request.validateUsing(affectServiceValidator);
-        const result = await this.dockerService.affectContainer(payload.service_name, payload.action);
-        if (!result) {
-            response.internalServerError({ error: 'Failed to affect service' });
-            return;
+        if (DockerService.isKubernetesMode()) {
+            return response.status(501).send({ error: 'Service lifecycle is managed by Kubernetes' })
         }
-        response.send({ success: result.success, message: result.message });
+
+        const payload = await request.validateUsing(affectServiceValidator)
+        const result = await this.dockerService.affectContainer(payload.service_name, payload.action)
+        if (!result) {
+            response.internalServerError({ error: 'Failed to affect service' })
+            return
+        }
+        response.send({ success: result.success, message: result.message })
     }
 
     async checkLatestVersion({ request }: HttpContext) {
@@ -55,13 +63,17 @@ export default class SystemController {
     }
 
     async forceReinstallService({ request, response }: HttpContext) {
-        const payload = await request.validateUsing(installServiceValidator);
-        const result = await this.dockerService.forceReinstall(payload.service_name);
-        if (!result) {
-            response.internalServerError({ error: 'Failed to force reinstall service' });
-            return;
+        if (DockerService.isKubernetesMode()) {
+            return response.status(501).send({ error: 'Service reinstallation is managed by Kubernetes' })
         }
-        response.send({ success: result.success, message: result.message });
+
+        const payload = await request.validateUsing(installServiceValidator)
+        const result = await this.dockerService.forceReinstall(payload.service_name)
+        if (!result) {
+            response.internalServerError({ error: 'Failed to force reinstall service' })
+            return
+        }
+        response.send({ success: result.success, message: result.message })
     }
 
     async requestSystemUpdate({ response }: HttpContext) {
@@ -144,6 +156,10 @@ export default class SystemController {
     }
 
     async updateService({ request, response }: HttpContext) {
+        if (DockerService.isKubernetesMode()) {
+            return response.status(501).send({ error: 'Service updates are managed by Kubernetes' })
+        }
+
         const payload = await request.validateUsing(updateServiceValidator)
         const result = await this.dockerService.updateContainer(
             payload.service_name,
@@ -158,6 +174,16 @@ export default class SystemController {
     }
 
     private async getHostArch(): Promise<string> {
+        if (DockerService.isKubernetesMode()) {
+            // In K8s, use Node.js process arch instead of Docker API
+            const archMap: Record<string, string> = {
+                x64: 'amd64',
+                arm64: 'arm64',
+                arm: 'arm',
+            }
+            return archMap[process.arch] || process.arch
+        }
+
         try {
             const info = await this.dockerService.docker.info()
             const arch = info.Architecture || ''
