@@ -447,7 +447,15 @@ export class MapService implements IMapService {
     }
 
     const hostOrOrigin = specifiedHost || getOrigin()
-    const withProtocol = hostOrOrigin.startsWith('http') ? hostOrOrigin : `http://${hostOrOrigin}`
+    let withProtocol: string
+    if (hostOrOrigin.startsWith('http')) {
+      withProtocol = hostOrOrigin
+    } else {
+      // Inherit protocol from the configured URL env var, fall back to https in production
+      const configuredUrl = env.get('URL', '')
+      const protocol = configuredUrl.startsWith('https') ? 'https' : 'http'
+      withProtocol = `${protocol}://${hostOrOrigin}`
+    }
     const baseUrlPath =
       process.env.NODE_ENV === 'production' ? childPath : urlJoin(this.mapStoragePath, childPath)
 
