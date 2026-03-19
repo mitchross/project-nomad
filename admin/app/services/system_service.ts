@@ -502,13 +502,31 @@ export class SystemService {
           ? !!process.env[envVar] || (service.service_name === SERVICE_NAMES.OLLAMA && !!process.env.OLLAMA_HOST)
           : false
 
-        if (isAvailable && !service.installed) {
-          logger.info(
-            `K8s mode: marking ${service.service_name} as installed (${envVar} is set)`
-          )
-          service.installed = true
-          service.installation_status = 'idle'
-          await service.save()
+        if (isAvailable) {
+          let changed = false
+
+          if (!service.installed) {
+            logger.info(
+              `K8s mode: marking ${service.service_name} as installed (${envVar} is set)`
+            )
+            service.installed = true
+            service.installation_status = 'idle'
+            changed = true
+          }
+
+          // Update ui_location to the external URL so the frontend can link to it
+          const externalUrl = process.env[envVar]
+          if (externalUrl && service.ui_location !== externalUrl) {
+            logger.info(
+              `K8s mode: updating ${service.service_name} ui_location to ${externalUrl}`
+            )
+            service.ui_location = externalUrl
+            changed = true
+          }
+
+          if (changed) {
+            await service.save()
+          }
         }
       }
     } catch (error) {
