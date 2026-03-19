@@ -434,20 +434,20 @@ export class MapService implements IMapService {
    * Gets the appropriate public URL for a map asset depending on environment
    */
   private getPublicFileBaseUrl(specifiedHost: string | null, childPath: string): string {
-    function getHost() {
+    function getOrigin() {
       try {
         const localUrlRaw = env.get('URL')
-        if (!localUrlRaw) return 'localhost'
+        if (!localUrlRaw) return 'http://localhost'
 
         const localUrl = new URL(localUrlRaw)
-        return localUrl.host
+        return localUrl.origin
       } catch (error) {
-        return 'localhost'
+        return 'http://localhost'
       }
     }
 
-    const host = specifiedHost || getHost()
-    const withProtocol = host.startsWith('http') ? host : `http://${host}`
+    const hostOrOrigin = specifiedHost || getOrigin()
+    const withProtocol = hostOrOrigin.startsWith('http') ? hostOrOrigin : `http://${hostOrOrigin}`
     const baseUrlPath =
       process.env.NODE_ENV === 'production' ? childPath : urlJoin(this.mapStoragePath, childPath)
 
