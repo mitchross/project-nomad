@@ -109,11 +109,45 @@ export class OllamaService {
   }
 
   /**
-   * Embed text using the LLM provider. Convenience wrapper for the provider's
-   * embed method, used by RagService.
+   * Embed text using the configured embedding endpoint.
+   * If EMBEDDING_HOST is set, embeddings are routed to a dedicated service
+   * (e.g. a separate llama-cpp instance or HuggingFace TEI) instead of the
+   * main LLM provider. This allows using purpose-built embedding models
+   * even when the chat LLM doesn't support embeddings.
    */
   public async embed(model: string, input: string[]) {
+    const embeddingHost = env.get('EMBEDDING_HOST')
+    if (embeddingHost) {
+      return this._embedViaDedicatedHost(embeddingHost, model, input)
+    }
     return await this.provider.embed(model, input)
+  }
+
+  private async _embedViaDedicatedHost(
+    host: string,
+    model: string,
+    input: string[]
+  ): Promise<{ embeddings: number[][] }> {
+    const baseURL = host.replace(/\/+$/, '')
+    const apiKey = env.get('EMBEDDING_API_KEY', 'unused')
+    const response = await fetch(`${baseURL}/embeddings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model, input }),
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`Embedding API error ${response.status}: ${text}`)
+    }
+
+    const data = await response.json() as any
+    return {
+      embeddings: data.data.map((d: any) => d.embedding),
+    }
   }
 
   async getAvailableModels(

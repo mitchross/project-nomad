@@ -81,6 +81,8 @@ export default await Env.create(new URL('../', import.meta.url), {
   EMBEDDING_DIMENSIONS: Env.schema.string.optional(),
   EMBEDDING_SEARCH_DOC_PREFIX: Env.schema.string.optional(),
   EMBEDDING_SEARCH_QUERY_PREFIX: Env.schema.string.optional(),
+  EMBEDDING_HOST: Env.schema.string.optional(),
+  EMBEDDING_API_KEY: Env.schema.string.optional(),
   QDRANT_HOST: Env.schema.string.optional(),
 
   /*
