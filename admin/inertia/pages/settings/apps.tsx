@@ -1,4 +1,4 @@
-import { Head } from '@inertiajs/react'
+import { Head, usePage } from '@inertiajs/react'
 import StyledTable from '~/components/StyledTable'
 import SettingsLayout from '~/layouts/SettingsLayout'
 import { ServiceSlim } from '../../../types/services'
@@ -30,6 +30,7 @@ export default function SettingsPage(props: { system: { services: ServiceSlim[] 
   const { isOnline } = useInternetStatus()
   const { subscribe } = useTransmit()
   const installActivity = useServiceInstallationActivity()
+  const { isKubernetesMode } = usePage<{ isKubernetesMode: boolean }>().props
 
   const [isInstalling, setIsInstalling] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -231,6 +232,24 @@ export default function SettingsPage(props: { system: { services: ServiceSlim[] 
     )
 
     if (!record) return null
+
+    // In Kubernetes mode, service lifecycle is managed by K8s — only show the Open button
+    if (isKubernetesMode) {
+      if (!record.installed) return null
+      return (
+        <div className="flex flex-wrap gap-2">
+          <StyledButton
+            icon={'IconExternalLink'}
+            onClick={() => {
+              window.open(getServiceLink(record.ui_location || 'unknown'), '_blank')
+            }}
+          >
+            Open
+          </StyledButton>
+        </div>
+      )
+    }
+
     if (!record.installed) {
       return (
         <div className="flex flex-wrap gap-2">
@@ -342,14 +361,16 @@ export default function SettingsPage(props: { system: { services: ServiceSlim[] 
                 Manage the applications that are available in your Project N.O.M.A.D. instance. Nightly update checks will automatically detect when new versions of these apps are available.
               </p>
             </div>
-            <StyledButton
-              icon="IconRefreshAlert"
-              onClick={handleCheckUpdates}
-              disabled={checkingUpdates || !isOnline}
-              loading={checkingUpdates}
-            >
-              Check for Updates
-            </StyledButton>
+            {!isKubernetesMode && (
+              <StyledButton
+                icon="IconRefreshAlert"
+                onClick={handleCheckUpdates}
+                disabled={checkingUpdates || !isOnline}
+                loading={checkingUpdates}
+              >
+                Check for Updates
+              </StyledButton>
+            )}
           </div>
           {loading && <LoadingSpinner fullscreen />}
           {!loading && (

@@ -40,7 +40,11 @@ export class OllamaProvider implements LLMProvider {
           throw new Error('Ollama service is not installed or running.')
         }
         this.ollama = new Ollama({ host: url })
-      })()
+      })().catch((err) => {
+        // Reset so the next call retries instead of returning the failed promise forever
+        this.initPromise = null
+        throw err
+      })
     }
     return this.initPromise
   }

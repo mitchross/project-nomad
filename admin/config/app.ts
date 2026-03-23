@@ -20,6 +20,15 @@ export const http = defineConfig({
   allowMethodSpoofing: false,
 
   /**
+   * Trust reverse proxies (Kubernetes Ingress, Traefik, nginx, etc.)
+   * to set X-Forwarded-Proto, X-Forwarded-Host, and X-Forwarded-For headers.
+   * Trusts loopback and private network ranges used by K8s pod networking.
+   */
+  trustProxy: (addr: string) => {
+    return /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1|fd|fe80:)/.test(addr)
+  },
+
+  /**
    * Enabling async local storage will let you access HTTP context
    * from anywhere inside your application.
    */

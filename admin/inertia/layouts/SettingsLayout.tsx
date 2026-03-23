@@ -18,7 +18,7 @@ import useServiceInstalledStatus from '~/hooks/useServiceInstalledStatus'
 import { SERVICE_NAMES } from '../../constants/service_names'
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
-  const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
+  const { aiAssistantName, isKubernetesMode } = usePage<{ aiAssistantName: string; isKubernetesMode: boolean }>().props
   const aiAssistantInstallStatus = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
 
   const navigation = [
@@ -28,13 +28,14 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
     { name: 'Content Explorer', href: '/settings/zim/remote-explorer', icon: IconZoom, current: false },
     { name: 'Content Manager', href: '/settings/zim', icon: IconFolder, current: false },
     { name: 'Maps Manager', href: '/settings/maps', icon: IconMapRoute, current: false },
-    {
+    // Dozzle (Service Logs & Metrics) is a Docker-specific tool, not available in Kubernetes
+    ...(!isKubernetesMode ? [{
       name: 'Service Logs & Metrics',
       href: getServiceLink('9999'),
       icon: IconDashboard,
       current: false,
       target: '_blank',
-    },
+    }] : []),
     {
       name: 'Check for Updates',
       href: '/settings/update',

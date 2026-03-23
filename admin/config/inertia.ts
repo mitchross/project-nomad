@@ -1,4 +1,5 @@
 import KVStore from '#models/kv_store'
+import { DockerService } from '#services/docker_service'
 import { SystemService } from '#services/system_service'
 import { defineConfig } from '@adonisjs/inertia'
 import type { InferSharedProps } from '@adonisjs/inertia/types'
@@ -15,6 +16,7 @@ const inertiaConfig = defineConfig({
   sharedData: {
     appVersion: () => SystemService.getAppVersion(),
     environment: process.env.NODE_ENV || 'production',
+    isKubernetesMode: () => DockerService.isKubernetesMode(),
     aiAssistantName: async () => {
       const customName = await KVStore.getValue('ai.assistantCustomName')
       return (customName && customName.trim()) ? customName : 'AI Assistant'

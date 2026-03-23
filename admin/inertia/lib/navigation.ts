@@ -14,7 +14,8 @@ export function getServiceLink(ui_location: string): string {
     const parsedPort = parseInt(ui_location, 10);
     if (!isNaN(parsedPort)) {
         // If it's a port number, return a link to the service on that port
-        return `http://${window.location.hostname}:${parsedPort}`;
+        // Preserve the current protocol to avoid mixed-content blocking behind HTTPS reverse proxies
+        return `${window.location.protocol}//${window.location.hostname}:${parsedPort}`;
     }
 
     const pathPattern = /^\/.+/;

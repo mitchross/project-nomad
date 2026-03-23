@@ -36,9 +36,10 @@ export class ChatService {
         return [] // If no models are available, return empty suggestions
       }
 
-      // Larger models generally give "better" responses, so pick the largest one
+      // Pick the best model for suggestions: prefer largest (Ollama reports real sizes),
+      // but fall back to the first model if all sizes are 0 (OpenAI-compatible providers)
       const largestModel = models.reduce((prev, current) => {
-        return prev.size > current.size ? prev : current
+        return current.size > prev.size ? current : prev
       })
 
       if (!largestModel) {

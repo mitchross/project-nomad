@@ -279,7 +279,8 @@ export class BenchmarkService {
       }
 
       // Fallback: Check Docker for nvidia runtime and query GPU model via nvidia-smi
-      if (!gpuModel) {
+      // Skip in Kubernetes mode — no Docker socket available
+      if (!gpuModel && !DockerService.isKubernetesMode()) {
         try {
           const dockerInfo = await this.dockerService.docker.info()
           const runtimes = dockerInfo.Runtimes || {}
@@ -413,9 +414,14 @@ export class BenchmarkService {
   }
 
   /**
-   * Run system benchmarks using sysbench in Docker
+   * Run system benchmarks using sysbench in Docker.
+   * In Kubernetes mode, Docker is unavailable so system benchmarks cannot run.
    */
   private async _runSystemBenchmarks(): Promise<SystemScores> {
+    if (DockerService.isKubernetesMode()) {
+      throw new Error('System benchmarks require Docker and are not available in Kubernetes mode. Run an AI-only benchmark instead.')
+    }
+
     // Ensure sysbench image is available
     await this._ensureSysbenchImage()
 
