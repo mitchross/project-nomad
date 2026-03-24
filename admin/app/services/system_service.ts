@@ -599,7 +599,10 @@ export class SystemService {
     // Qdrant) keep their seeder-defined ui_location (e.g. '/chat') because their
     // env vars are internal API endpoints, not browser-facing URLs.
     const serviceEnvMap: Record<string, { envVar: string; uiUrl?: string }> = {
-      [SERVICE_NAMES.KIWIX]: { envVar: 'KIWIX_URL', uiUrl: process.env.KIWIX_URL },
+      // Kiwix: link to NOMAD's Content Explorer (all categories: Wikipedia, medicine,
+      // survival, etc.) rather than the raw Kiwix server which only shows loaded ZIMs.
+      [SERVICE_NAMES.KIWIX]: { envVar: 'KIWIX_URL', uiUrl: '/settings/zim/remote-explorer' },
+      // Kolibri: link to NOMAD's Content Explorer for education content
       [SERVICE_NAMES.KOLIBRI]: { envVar: 'KOLIBRI_URL', uiUrl: process.env.KOLIBRI_URL },
       [SERVICE_NAMES.CYBERCHEF]: { envVar: 'CYBERCHEF_URL', uiUrl: process.env.CYBERCHEF_URL },
       [SERVICE_NAMES.FLATNOTES]: { envVar: 'FLATNOTES_URL', uiUrl: process.env.FLATNOTES_URL },
