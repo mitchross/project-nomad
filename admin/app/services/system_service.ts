@@ -593,51 +593,60 @@ export class SystemService {
    * The LLM provider (Ollama/llama-cpp) is detected via LLM_HOST or OLLAMA_HOST.
    */
   private async _syncServicesForKubernetes() {
-    // Map service names to the env var that indicates they're deployed
-    const serviceEnvMap: Record<string, string> = {
-      [SERVICE_NAMES.KIWIX]: 'KIWIX_URL',
-      [SERVICE_NAMES.KOLIBRI]: 'KOLIBRI_URL',
-      [SERVICE_NAMES.CYBERCHEF]: 'CYBERCHEF_URL',
-      [SERVICE_NAMES.FLATNOTES]: 'FLATNOTES_URL',
-      [SERVICE_NAMES.QDRANT]: 'QDRANT_HOST',
-      [SERVICE_NAMES.OLLAMA]: 'LLM_HOST',
+    // Map service names to the env var that indicates they're deployed.
+    // Services with `uiUrl` set will have their ui_location updated to that URL
+    // so the frontend can link to them. Services without `uiUrl` (like Ollama and
+    // Qdrant) keep their seeder-defined ui_location (e.g. '/chat') because their
+    // env vars are internal API endpoints, not browser-facing URLs.
+    const serviceEnvMap: Record<string, { envVar: string; uiUrl?: string }> = {
+      [SERVICE_NAMES.KIWIX]: { envVar: 'KIWIX_URL', uiUrl: process.env.KIWIX_URL },
+      [SERVICE_NAMES.KOLIBRI]: { envVar: 'KOLIBRI_URL', uiUrl: process.env.KOLIBRI_URL },
+      [SERVICE_NAMES.CYBERCHEF]: { envVar: 'CYBERCHEF_URL', uiUrl: process.env.CYBERCHEF_URL },
+      [SERVICE_NAMES.FLATNOTES]: { envVar: 'FLATNOTES_URL', uiUrl: process.env.FLATNOTES_URL },
+      [SERVICE_NAMES.QDRANT]: { envVar: 'QDRANT_HOST' },
+      [SERVICE_NAMES.OLLAMA]: { envVar: 'LLM_HOST' },
     }
 
     try {
       const allServices = await Service.all()
 
       for (const service of allServices) {
-        const envVar = serviceEnvMap[service.service_name]
+        const config = serviceEnvMap[service.service_name]
+        if (!config) continue
+
         // For Ollama/LLM, also check OLLAMA_HOST as a fallback
-        const isAvailable = envVar
-          ? !!process.env[envVar] || (service.service_name === SERVICE_NAMES.OLLAMA && !!process.env.OLLAMA_HOST)
-          : false
+        const isAvailable = !!process.env[config.envVar] ||
+          (service.service_name === SERVICE_NAMES.OLLAMA && !!process.env.OLLAMA_HOST)
 
-        if (isAvailable) {
-          let changed = false
+        let changed = false
 
-          if (!service.installed) {
-            logger.info(
-              `K8s mode: marking ${service.service_name} as installed (${envVar} is set)`
-            )
-            service.installed = true
-            service.installation_status = 'idle'
-            changed = true
-          }
+        if (isAvailable && !service.installed) {
+          logger.info(
+            `K8s mode: marking ${service.service_name} as installed (${config.envVar} is set)`
+          )
+          service.installed = true
+          service.installation_status = 'idle'
+          changed = true
+        } else if (!isAvailable && service.installed) {
+          logger.info(
+            `K8s mode: marking ${service.service_name} as not installed (${config.envVar} is not set)`
+          )
+          service.installed = false
+          service.installation_status = 'idle'
+          changed = true
+        }
 
-          // Update ui_location to the external URL so the frontend can link to it
-          const externalUrl = process.env[envVar]
-          if (externalUrl && service.ui_location !== externalUrl) {
-            logger.info(
-              `K8s mode: updating ${service.service_name} ui_location to ${externalUrl}`
-            )
-            service.ui_location = externalUrl
-            changed = true
-          }
+        // Only update ui_location for browser-facing companion services
+        if (isAvailable && config.uiUrl && service.ui_location !== config.uiUrl) {
+          logger.info(
+            `K8s mode: updating ${service.service_name} ui_location to ${config.uiUrl}`
+          )
+          service.ui_location = config.uiUrl
+          changed = true
+        }
 
-          if (changed) {
-            await service.save()
-          }
+        if (changed) {
+          await service.save()
         }
       }
     } catch (error) {
