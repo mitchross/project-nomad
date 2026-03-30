@@ -167,6 +167,28 @@ export class DockerService {
       return null
     }
 
+    // In Kubernetes mode, resolve service URLs directly from environment variables.
+    // The database doesn't store K8s service endpoints — only Docker container_config
+    // and port-based ui_location work in Docker mode.
+    if (DockerService.isKubernetesMode()) {
+      const k8sEnvMap: Record<string, string[]> = {
+        [SERVICE_NAMES.OLLAMA]: ['LLM_HOST', 'OLLAMA_HOST'],
+        [SERVICE_NAMES.QDRANT]: ['QDRANT_HOST'],
+        [SERVICE_NAMES.KIWIX]: ['KIWIX_URL'],
+        [SERVICE_NAMES.CYBERCHEF]: ['CYBERCHEF_URL'],
+        [SERVICE_NAMES.FLATNOTES]: ['FLATNOTES_URL'],
+        [SERVICE_NAMES.KOLIBRI]: ['KOLIBRI_URL'],
+      }
+      const envVars = k8sEnvMap[serviceName]
+      if (envVars) {
+        for (const envVar of envVars) {
+          const url = process.env[envVar]
+          if (url) return url
+        }
+      }
+      return null
+    }
+
     const service = await Service.query()
       .where('service_name', serviceName)
       .andWhere('installed', true)
@@ -642,8 +664,8 @@ export class DockerService {
      * We'll download the lightweight mini Wikipedia Top 100 zim file for this purpose.
      **/
     const WIKIPEDIA_ZIM_URL =
-      'https://github.com/Crosstalk-Solutions/project-nomad/raw/refs/heads/main/install/wikipedia_en_100_mini_2025-06.zim'
-    const filename = 'wikipedia_en_100_mini_2025-06.zim'
+      'https://github.com/Crosstalk-Solutions/project-nomad/raw/refs/heads/main/install/wikipedia_en_100_mini_2026-01.zim'
+    const filename = 'wikipedia_en_100_mini_2026-01.zim'
     const filepath = join(process.cwd(), ZIM_STORAGE_PATH, filename)
     logger.info(`[DockerService] Kiwix Serve pre-install: Downloading ZIM file to ${filepath}`)
 

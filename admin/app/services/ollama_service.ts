@@ -37,9 +37,9 @@ export class OllamaService {
    * support model management (Ollama). For OpenAI-compatible providers, returns
    * a message indicating that model management is not supported.
    */
-  async downloadModel(model: string, progressCallback?: (percent: number) => void): Promise<{ success: boolean; message: string }> {
+  async downloadModel(model: string, progressCallback?: (percent: number) => void): Promise<{ success: boolean; message: string; retryable?: boolean }> {
     if (!this.provider.supportsModelManagement() || !this.provider.pullModel) {
-      return { success: false, message: 'Model management is not supported by the current LLM provider.' }
+      return { success: false, message: 'Model management is not supported by the current LLM provider.', retryable: false }
     }
 
     const wrappedCallback = progressCallback
@@ -51,7 +51,11 @@ export class OllamaService {
         this.broadcastDownloadProgress(model, percent)
       }
 
-    return this.provider.pullModel(model, wrappedCallback)
+    const result = await this.provider.pullModel(model, wrappedCallback)
+    if (!result.success) {
+      this.broadcastDownloadError(model, result.message)
+    }
+    return result
   }
 
   async dispatchModelDownload(modelName: string): Promise<{ success: boolean; message: string }> {
@@ -345,6 +349,15 @@ export class OllamaService {
     })
 
     return models
+  }
+
+  private broadcastDownloadError(model: string, error: string) {
+    transmit.broadcast(BROADCAST_CHANNELS.OLLAMA_MODEL_DOWNLOAD, {
+      model,
+      percent: -1,
+      error,
+      timestamp: new Date().toISOString(),
+    })
   }
 
   private broadcastDownloadProgress(model: string, percent: number) {
