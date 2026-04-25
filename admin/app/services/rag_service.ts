@@ -8,6 +8,8 @@ import { deleteFileIfExists, determineFileType, getFile, getFileStatsIfExists, l
 import { PDFParse } from 'pdf-parse'
 import { createWorker } from 'tesseract.js'
 import { fromBuffer } from 'pdf2pic'
+import JSZip from 'jszip'
+import * as cheerio from 'cheerio'
 import { OllamaService } from './ollama_service.js'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
 import { removeStopwords } from 'stopword'
@@ -24,15 +26,18 @@ export class RagService {
   private qdrant: QdrantClient | null = null
   private qdrantInitPromise: Promise<void> | null = null
   private embeddingModelVerified = false
+  private resolvedEmbeddingModel: string | null = null
   public static UPLOADS_STORAGE_PATH = 'storage/kb_uploads'
   public static CONTENT_COLLECTION_NAME = 'nomad_knowledge_base'
   public static EMBEDDING_MODEL = env.get('EMBEDDING_MODEL', 'nomic-embed-text:v1.5')
   public static EMBEDDING_DIMENSION = parseInt(env.get('EMBEDDING_DIMENSIONS', '768')) // Nomic Embed Text v1.5 dimension is 768
   public static MODEL_CONTEXT_LENGTH = 2048 // nomic-embed-text has 2K token context
-  public static MAX_SAFE_TOKENS = 1800 // Leave buffer for prefix and tokenization variance
-  public static TARGET_TOKENS_PER_CHUNK = 1700 // Target 1700 tokens per chunk for embedding
+  public static MAX_SAFE_TOKENS = 1600 // Leave buffer for prefix and tokenization variance
+  public static TARGET_TOKENS_PER_CHUNK = 1500 // Target 1500 tokens per chunk for embedding
   public static PREFIX_TOKEN_BUDGET = 10 // Reserve ~10 tokens for prefixes
-  public static CHAR_TO_TOKEN_RATIO = 3 // Approximate chars per token
+  public static CHAR_TO_TOKEN_RATIO = 2 // Conservative chars-per-token estimate; technical docs
+                                         // (numbers, symbols, abbreviations) tokenize denser
+                                         // than plain prose (~3), so 2 avoids context overflows
   // Nomic Embed Text v1.5 uses task-specific prefixes for optimal performance
   public static SEARCH_DOCUMENT_PREFIX = env.get('EMBEDDING_SEARCH_DOC_PREFIX', 'search_document: ')
   public static SEARCH_QUERY_PREFIX = env.get('EMBEDDING_SEARCH_QUERY_PREFIX', 'search_query: ')
@@ -252,7 +257,9 @@ export class RagService {
 
       if (!this.embeddingModelVerified) {
         const allModels = await this.ollamaService.getModels(true)
-        const embeddingModel = allModels.find((model) => model.name === RagService.EMBEDDING_MODEL)
+        const embeddingModel =
+          allModels.find((model) => model.name === RagService.EMBEDDING_MODEL) ??
+          allModels.find((model) => model.name.toLowerCase().includes('nomic-embed-text'))
 
         if (!embeddingModel) {
           try {
@@ -269,6 +276,7 @@ export class RagService {
             return null
           }
         }
+        this.resolvedEmbeddingModel = embeddingModel?.name ?? RagService.EMBEDDING_MODEL
         this.embeddingModelVerified = true
       }
 
@@ -325,7 +333,7 @@ export class RagService {
 
         logger.debug(`[RAG] Embedding batch ${batchIdx + 1}/${totalBatches} (${batch.length} chunks)`)
 
-        const response = await this.ollamaService.embed(RagService.EMBEDDING_MODEL, batch)
+        const response = await this.ollamaService.embed(this.resolvedEmbeddingModel ?? RagService.EMBEDDING_MODEL, batch)
 
         embeddings.push(...response.embeddings)
 
@@ -531,9 +539,12 @@ export class RagService {
       }
     }
 
-    // Count unique articles processed in this batch
+    // Count unique articles processed in this batch. hasMoreBatches gates on the article
+    // count — zimChunks.length counts section-level chunks (multiple per article under the
+    // 'structured' strategy), so comparing it to ZIM_BATCH_SIZE (an article limit) caps
+    // processing at the first batch for any real archive.
     const articlesInBatch = new Set(zimChunks.map((c) => c.documentId)).size
-    const hasMoreBatches = zimChunks.length === ZIM_BATCH_SIZE
+    const hasMoreBatches = articlesInBatch >= ZIM_BATCH_SIZE
 
     logger.info(
       `[RAG] Successfully embedded ${totalChunks} total chunks from ${articlesInBatch} articles (hasMore: ${hasMoreBatches})`
@@ -564,6 +575,86 @@ export class RagService {
 
   private async processTextFile(fileBuffer: Buffer): Promise<string> {
     return await this.extractTXTText(fileBuffer)
+  }
+
+  /**
+   * Extract text content from an EPUB file.
+   * EPUBs are ZIP archives containing XHTML content files.
+   * Reads the OPF manifest to determine reading order, then extracts
+   * text from each content document in sequence.
+   */
+  private async processEPUBFile(fileBuffer: Buffer): Promise<string> {
+    const zip = await JSZip.loadAsync(fileBuffer)
+
+    // Read container.xml to find the OPF file path
+    const containerXml = await zip.file('META-INF/container.xml')?.async('text')
+    if (!containerXml) {
+      throw new Error('Invalid EPUB: missing META-INF/container.xml')
+    }
+
+    // Parse container.xml to get the OPF rootfile path
+    const $container = cheerio.load(containerXml, { xml: true })
+    const opfPath = $container('rootfile').attr('full-path')
+    if (!opfPath) {
+      throw new Error('Invalid EPUB: no rootfile found in container.xml')
+    }
+
+    // Determine the base directory of the OPF file for resolving relative paths
+    const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : ''
+
+    // Read and parse the OPF file
+    const opfContent = await zip.file(opfPath)?.async('text')
+    if (!opfContent) {
+      throw new Error(`Invalid EPUB: OPF file not found at ${opfPath}`)
+    }
+
+    const $opf = cheerio.load(opfContent, { xml: true })
+
+    // Build a map of manifest items (id -> href)
+    const manifestItems = new Map<string, string>()
+    $opf('manifest item').each((_, el) => {
+      const id = $opf(el).attr('id')
+      const href = $opf(el).attr('href')
+      const mediaType = $opf(el).attr('media-type') || ''
+      // Only include XHTML/HTML content documents
+      if (id && href && (mediaType.includes('html') || mediaType.includes('xml'))) {
+        manifestItems.set(id, href)
+      }
+    })
+
+    // Get the reading order from the spine
+    const spineOrder: string[] = []
+    $opf('spine itemref').each((_, el) => {
+      const idref = $opf(el).attr('idref')
+      if (idref && manifestItems.has(idref)) {
+        spineOrder.push(manifestItems.get(idref)!)
+      }
+    })
+
+    // If no spine found, fall back to all manifest items
+    const contentFiles = spineOrder.length > 0
+      ? spineOrder
+      : Array.from(manifestItems.values())
+
+    // Extract text from each content file in order
+    const textParts: string[] = []
+    for (const href of contentFiles) {
+      const fullPath = opfDir + href
+      const content = await zip.file(fullPath)?.async('text')
+      if (content) {
+        const $ = cheerio.load(content)
+        // Remove script and style elements
+        $('script, style').remove()
+        const text = $('body').text().trim()
+        if (text) {
+          textParts.push(text)
+        }
+      }
+    }
+
+    const fullText = textParts.join('\n\n')
+    logger.debug(`[RAG] EPUB extracted ${textParts.length} chapters, ${fullText.length} characters total`)
+    return fullText
   }
 
   private async embedTextAndCleanup(
@@ -640,6 +731,9 @@ export class RagService {
         case 'pdf':
           extractedText = await this.processPDFFile(fileBuffer!)
           break
+        case 'epub':
+          extractedText = await this.processEPUBFile(fileBuffer!)
+          break
         case 'text':
         default:
           extractedText = await this.processTextFile(fileBuffer!)
@@ -694,7 +788,9 @@ export class RagService {
 
       if (!this.embeddingModelVerified) {
         const allModels = await this.ollamaService.getModels(true)
-        const embeddingModel = allModels.find((model) => model.name === RagService.EMBEDDING_MODEL)
+        const embeddingModel =
+          allModels.find((model) => model.name === RagService.EMBEDDING_MODEL) ??
+          allModels.find((model) => model.name.toLowerCase().includes('nomic-embed-text'))
 
         if (!embeddingModel) {
           logger.warn(
@@ -703,6 +799,7 @@ export class RagService {
           this.embeddingModelVerified = false
           return []
         }
+        this.resolvedEmbeddingModel = embeddingModel.name
         this.embeddingModelVerified = true
       }
 
@@ -729,7 +826,7 @@ export class RagService {
         return []
       }
 
-      const response = await this.ollamaService.embed(RagService.EMBEDDING_MODEL, [prefixedQuery])
+      const response = await this.ollamaService.embed(this.resolvedEmbeddingModel ?? RagService.EMBEDDING_MODEL, [prefixedQuery])
 
       // Perform semantic search with a higher limit to enable reranking
       const searchLimit = limit * 3 // Get more results for reranking
@@ -926,6 +1023,16 @@ export class RagService {
    * Retrieve all unique source files that have been stored in the knowledge base.
    * @returns Array of unique full source paths
    */
+  public async hasDocuments(): Promise<boolean> {
+    try {
+      await this._ensureCollection(RagService.CONTENT_COLLECTION_NAME, RagService.EMBEDDING_DIMENSION)
+      const collectionInfo = await this.qdrant!.getCollection(RagService.CONTENT_COLLECTION_NAME)
+      return (collectionInfo.points_count ?? 0) > 0
+    } catch {
+      return false
+    }
+  }
+
   public async getStoredFiles(): Promise<string[]> {
     try {
       await this._ensureCollection(
@@ -1155,8 +1262,12 @@ export class RagService {
 
       logger.info(`[RAG] Found ${sourcesInQdrant.size} unique sources in Qdrant`)
 
-      // Find files that are in storage but not in Qdrant
-      const filesToEmbed = filesInStorage.filter((filePath) => !sourcesInQdrant.has(filePath))
+      // Find files that are in storage, not already in Qdrant, and have an embeddable type.
+      // Non-embeddable files (e.g. kiwix-library.xml in /storage/zim) would otherwise be
+      // dispatched to EmbedFileJob, fail with "Unsupported file type", and retry on every sync.
+      const filesToEmbed = filesInStorage.filter(
+        (filePath) => !sourcesInQdrant.has(filePath) && determineFileType(filePath) !== 'unknown'
+      )
 
       logger.info(`[RAG] Found ${filesToEmbed.length} files that need embedding`)
 

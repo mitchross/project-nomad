@@ -1,5 +1,69 @@
 # Release Notes
 
+## Version 1.31.1 - April 21, 2026
+
+### Features
+
+### Bug Fixes
+- **AI Assistant**: In-progress model downloads can now be cancelled properly and the progress UI now matches that of file downloads. Thanks @chriscrosstalk for the contribution!
+- **AI Assistant**: Fixed an issue where the AI Assistant settings page could crash if a model object did not have a details property. Thanks @hestela for the fix!
+- **AI Assistant**: Fixed an issue with non-embeddable files being queued for embedding and flooding logs with errors. Thanks @sbruschke for the bug report and @chriscrosstalk for the fix!
+- **AI Assistant**: Fixed an issue with ZIM batch embedding using the wrong batch count and causing remaining batches to be skipped. Thanks @sbruschke for the bug report and @chriscrosstalk for the fix!
+- **AI Assistant**: Fixed an issue with ZIM content extraction only extracting the first-level children of the article body and thus missing a lot of content. Thanks @sbruschke for the bug report and @chriscrosstalk for the fix!
+- **Disk Collector**: Improved reporting for NFS mount stats and display in the UI. Thanks @bgauger and @bravosierra99 for the contribution!
+- **Downloads**: Downloads are now staged to .tmp files and atomically renamed upon completion to prevent issues with incomplete/corrupt files. Thanks @artbird309 for the contribution!
+- **Downloads**: Removed a duplicate error listener and improved stability when handling Range requests for file downloads. Thanks @jakeaturner for the contribution!
+- **Downloads**: Added improved handling for corrupt ZIM file downloads and removed duplicate Ollama download logs. Thanks @aegisman for the contribution!
+- **Security**: Closed a potential SSRF vulnerability in the map file download functionality by implementing stricter URL validation and blocking private IP ranges. Thanks @LuisMIguelFurlanettoSousa for the fix!
+- **Security**: Sanitized error messages from the backend to prevent potential information disclosure. Thanks @LuisMIguelFurlanettoSousa for the fix!
+- **UI**: Fixed an issue with broken pagination for the Content Explorer that could cause some users to see a "No records found" message indefinitely. Thanks @johno10661 for the bug report and @chriscrosstalk for the fix!
+- **UI**: Fixed an issue where all storage devices could report as "NAS Storage" regardless of actual type. Thanks @bgauger for the fix!
+
+### Improvements
+- **AI Assistant**: Now uses the currently loaded model for query rewriting and chat title generation for improved performance and consistency. Thanks @hestela for the contribution!
+- **AI Assistant**: When a remote Ollama URL is configured, the Command Center will now attempt to stop NOMAD's local Ollama container to free up resources and avoid confusion. Thanks @chriscrosstalk for the contribution!
+- **Dependencies**: Updated various dependencies to close security vulnerabilities and improve stability
+- **Docs**: Added a "Community Add-Ons" page to the documentation to highlight some of the amazing community contributions that have been made since launch. Thanks @chriscrosstalk for the contribution!
+- **Privacy**: Added the appropriate environment variable to disable telemetry for the Qdrant container. Note that this will only take effect on new installations of if the Qdrant container is force re-installed on existing installations. Thanks @berkdamerc for the find and @chriscrosstalk for the contribution!
+
+## Version 1.31.0 - April 3, 2026
+
+### Features
+- **AI Assistant**: Added support for remote OpenAI-compatible hosts (e.g. Ollama, LM Studio, etc.) to support running models on seperate hardware from the Command Center host. Thanks @hestela for the contribution!
+- **AI Assistant**: Disabled Ollama Cloud support (not compatible with NOMAD's architecture) and added support for flash_attn to improve performance of compatible models. Thanks @hestela for the contribution!
+- **Information Library (Kiwix)**: The Kiwix container now uses an XML library file approach instead of a glob-based approach to inform the Kiwix container of available ZIM files. This allows for much more robust handling of ZIM files and avoids issues with the container failing to start due to incomplete/corrupt ZIM files being present in the storage directory. Thanks @jakeaturner for the contribution!
+- **RAG**: Added support for EPUB file embedding into the Knowledge Base. Thanks @arn6694 for the contribution!
+- **RAG**: Added support for multiple file uploads (<=5, 100mb each) to the Knowledge Base. Thanks @jakeaturner for the contribution!
+- **Maps**: Added support for customizable location markers on the map with database persistence. Thanks @chriscrosstalk for the contribution!
+- **Maps**: The global map file can now be downloaded directly from PMTiles for users who want to the full map and/or regions outside of the U.S. that haven't been added to the curated collections yet. Thanks @bgauger for the contribution!
+- **Maps**: Added a scale bar to the map viewer with imperial and metric options. Thanks @chriscrosstalk for the contribution!
+- **Downloads**: Added support/improvements for rich progress, friendly names, cancellation, and live status updates for active downloads in the UI. Thanks @chriscrosstalk for the contribution!
+- **UI**: Converted all PNGs to WEBP for reduced image sizes and improved performance. Thanks @hestela for the contribution!
+- **UI**: Added an Installed Models section to AI Assistant settings. Thanks @chriscrosstalk for the contribution!
+
+### Bug Fixes
+- **Maps**: The maps API endpoints now properly check for "X-Forwarded-Proto" to support scenarios where the Command Center is behind a reverse proxy that terminates TLS. Thanks @davidgross for the fix!
+- **Maps**: Fixed an issue where the maps API endpoints could fail with an internal error if a hostname was used to access the Command Center instead of an IP address or localhost. Thanks @jakeaturner for the fix!
+- **Queue**: Increased the BullMQ lockDuration to prevent jobs from being killed prematurely on slower systems. Thanks @bgauger for the contribution!
+- **Queue**: Added better handling for very large downloads and user-initated cancellations. Thanks @bgauger for the contribution!
+- **Install**: The install script now checks for the presence of gpg (required for NVIDIA toolkit install) and automatically attempts to install it if it's missing. Thanks @chriscrosstalk for the fix!
+- **Security**: Added key validation to the settings read API endpoint. Thanks @LuisMIguelFurlanettoSousa for the fix!
+- **Security**: Improved URL validation logic for ZIM downloads to prevent SSRF vulnerabilities. Thanks @sebastiondev for the fix!
+- **UI**: Fixed the activity feed height in Easy Setup and added automatic scrolling to the latest message during installation. Thanks @chriscrosstalk for the contribution!
+
+### Improvements
+
+- **Dependencies**: Updated various dependencies to close security vulnerabilities and improve stability
+- **Docker**: NOMAD now adds 'com.docker.compose.project': 'project-nomad-managed' and 'io.project-nomad.managed': 'true' labels to all containers installed via the Command Center to improve compatibility with other Docker management tools and make it easier to identify and manage NOMAD containers. Thanks @techyogi for the contribution!
+- **Docs**: Added a simple API reference for power users and developers. Thanks @hestela for the contribution!
+- **Docs**: Re-formatted the Quick Install command into multiple lines for better readability in the README. Thanks @samsara-02 for the contribution!
+- **Docs**: Updated the CONTRIBUTING and FAQ guides with the latest information and clarified some common questions. Thanks @jakeaturner for the contribution!
+- **Ops**: Bumped GitHub Actions to their latest versions. Thanks @salmanmkc for the contribution!
+- **Performance**: Shrunk the bundle size of the Command Center UI significantly by optimizing dependencies and tree-shaking, resulting in faster load times and a snappier user experience. Thanks @jakeaturner for the contribution!
+- **Performance**: Implemented gzip compression by default for all HTTP registered routes from the Command Center backend to further improve performance, especially on slower connections. The DISABLE_COMPRESSION environment variable can be used to turn off this feature if needed. Thanks @jakeaturner for the contribution!
+- **Performance**: Added light caching of certain Docker socket interactions and custom AI Assistant name resolution to improve performance and reduce redundant calls to the Docker API. Thanks @jakeaturner for the contribution!
+- **Performance**: Switched to Inertia router navigation calls where appropriate to take advantage of Inertia's built-in caching and performance optimizations for a smoother user experience. Thanks @jakeaturner for the contribution!
+
 ## Version 1.30.3 - March 25, 2026
 
 ### Features

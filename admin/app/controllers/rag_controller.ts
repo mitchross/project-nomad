@@ -6,6 +6,7 @@ import app from '@adonisjs/core/services/app'
 import { randomBytes } from 'node:crypto'
 import { sanitizeFilename } from '../utils/fs.js'
 import { deleteFileSchema, getJobStatusSchema } from '#validators/rag'
+import logger from '@adonisjs/core/services/logger'
 
 @inject()
 export default class RagController {
@@ -74,12 +75,26 @@ export default class RagController {
     return response.status(200).json({ message: result.message })
   }
 
+  public async getFailedJobs({ response }: HttpContext) {
+    const jobs = await EmbedFileJob.listFailedJobs()
+    return response.status(200).json(jobs)
+  }
+
+  public async cleanupFailedJobs({ response }: HttpContext) {
+    const result = await EmbedFileJob.cleanupFailedJobs()
+    return response.status(200).json({
+      message: `Cleaned up ${result.cleaned} failed job${result.cleaned !== 1 ? 's' : ''}${result.filesDeleted > 0 ? `, deleted ${result.filesDeleted} file${result.filesDeleted !== 1 ? 's' : ''}` : ''}.`,
+      ...result,
+    })
+  }
+
   public async scanAndSync({ response }: HttpContext) {
     try {
       const syncResult = await this.ragService.scanAndSyncStorage()
       return response.status(200).json(syncResult)
     } catch (error) {
-      return response.status(500).json({ error: 'Error scanning and syncing storage', details: error.message })
+      logger.error({ err: error }, '[RagController] Error scanning and syncing storage')
+      return response.status(500).json({ error: 'Error scanning and syncing storage' })
     }
   }
 }

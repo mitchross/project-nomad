@@ -3,6 +3,7 @@ import { BaseSeeder } from '@adonisjs/lucid/seeders'
 import { ModelAttributes } from '@adonisjs/lucid/types/model'
 import env from '#start/env'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
+import { KIWIX_LIBRARY_CMD } from '../../constants/kiwix.js'
 
 export default class ServiceSeeder extends BaseSeeder {
   // Use environment variable with fallback to production default
@@ -24,7 +25,7 @@ export default class ServiceSeeder extends BaseSeeder {
       icon: 'IconBooks',
       container_image: 'ghcr.io/kiwix/kiwix-serve:3.8.1',
       source_repo: 'https://github.com/kiwix/kiwix-tools',
-      container_command: '*.zim --address=all',
+      container_command: KIWIX_LIBRARY_CMD,
       container_config: JSON.stringify({
         HostConfig: {
           RestartPolicy: { Name: 'unless-stopped' },
@@ -56,6 +57,10 @@ export default class ServiceSeeder extends BaseSeeder {
           PortBindings: { '6333/tcp': [{ HostPort: '6333' }], '6334/tcp': [{ HostPort: '6334' }] },
         },
         ExposedPorts: { '6333/tcp': {}, '6334/tcp': {} },
+        // Disable Qdrant's anonymous telemetry to telemetry.qdrant.io. NOMAD is offline-first
+        // and ships with zero telemetry by default — Qdrant's upstream default of enabled
+        // telemetry doesn't match that posture.
+        Env: ['QDRANT__TELEMETRY_DISABLED=true'],
       }),
       ui_location: '6333',
       installed: false,

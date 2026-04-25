@@ -4,28 +4,33 @@ import { DockerService } from '#services/docker_service'
 import { ServiceSlim } from '../../types/services.js'
 import logger from '@adonisjs/core/services/logger'
 import si from 'systeminformation'
-import { GpuHealthStatus, NomadDiskInfo, NomadDiskInfoRaw, SystemInformationResponse } from '../../types/system.js'
+import {
+  GpuHealthStatus,
+  NomadDiskInfo,
+  NomadDiskInfoRaw,
+  SystemInformationResponse,
+} from '../../types/system.js'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
-import { readFileSync } from 'fs'
-import path, { join } from 'path'
+import { readFileSync } from 'node:fs'
+import path, { join } from 'node:path'
 import { getAllFilesystems, getFile } from '../utils/fs.js'
 import axios from 'axios'
 import env from '#start/env'
 import KVStore from '#models/kv_store'
 import { KV_STORE_SCHEMA, KVStoreKey } from '../../types/kv_store.js'
 import { isNewerVersion } from '../utils/version.js'
-
+import { invalidateAssistantNameCache } from '../../config/inertia.js'
 
 @inject()
 export class SystemService {
   private static appVersion: string | null = null
   private static diskInfoFile = '/storage/nomad-disk-info.json'
 
-  constructor(private dockerService: DockerService) { }
+  constructor(private dockerService: DockerService) {}
 
   async checkServiceInstalled(serviceName: string): Promise<boolean> {
-    const services = await this.getServices({ installedOnly: true });
-    return services.some(service => service.service_name === serviceName);
+    const services = await this.getServices({ installedOnly: true })
+    return services.some((service) => service.service_name === serviceName)
   }
 
   async getInternetStatus(): Promise<boolean> {
@@ -67,18 +72,24 @@ export class SystemService {
     return false
   }
 
-  async getNvidiaSmiInfo(): Promise<Array<{ vendor: string; model: string; vram: number; }> | { error: string } | 'OLLAMA_NOT_FOUND' | 'BAD_RESPONSE' | 'UNKNOWN_ERROR'> {
+  async getNvidiaSmiInfo(): Promise<
+    | Array<{ vendor: string; model: string; vram: number }>
+    | { error: string }
+    | 'OLLAMA_NOT_FOUND'
+    | 'BAD_RESPONSE'
+    | 'UNKNOWN_ERROR'
+  > {
     if (DockerService.isKubernetesMode()) {
       return 'OLLAMA_NOT_FOUND'
     }
 
     try {
       const containers = await this.dockerService.docker.listContainers({ all: false })
-      const ollamaContainer = containers.find((c) =>
-        c.Names.includes(`/${SERVICE_NAMES.OLLAMA}`)
-      )
+      const ollamaContainer = containers.find((c) => c.Names.includes(`/${SERVICE_NAMES.OLLAMA}`))
       if (!ollamaContainer) {
-        logger.info('Ollama container not found for nvidia-smi info retrieval. This is expected if Ollama is not installed.')
+        logger.info(
+          'Ollama container not found for nvidia-smi info retrieval. This is expected if Ollama is not installed.'
+        )
         return 'OLLAMA_NOT_FOUND'
       }
 
@@ -96,23 +107,35 @@ export class SystemService {
       const output = await new Promise<string>((resolve) => {
         let data = ''
         const timeout = setTimeout(() => resolve(data), 5000)
-        stream.on('data', (chunk: Buffer) => { data += chunk.toString() })
-        stream.on('end', () => { clearTimeout(timeout); resolve(data) })
+        stream.on('data', (chunk: Buffer) => {
+          data += chunk.toString()
+        })
+        stream.on('end', () => {
+          clearTimeout(timeout)
+          resolve(data)
+        })
       })
 
       // Remove any non-printable characters and trim the output
-      const cleaned = output.replace(/[\x00-\x08]/g, '').trim()
-      if (cleaned && !cleaned.toLowerCase().includes('error') && !cleaned.toLowerCase().includes('not found')) {
+      const cleaned = Array.from(output)
+        .filter((character) => character.charCodeAt(0) > 8)
+        .join('')
+        .trim()
+      if (
+        cleaned &&
+        !cleaned.toLowerCase().includes('error') &&
+        !cleaned.toLowerCase().includes('not found')
+      ) {
         // Split by newlines to handle multiple GPUs installed
-        const lines = cleaned.split('\n').filter(line => line.trim())
+        const lines = cleaned.split('\n').filter((line) => line.trim())
 
         // Map each line out to a useful structure for us
-        const gpus = lines.map(line => {
+        const gpus = lines.map((line) => {
           const parts = line.split(',').map((s) => s.trim())
           return {
             vendor: 'NVIDIA',
             model: parts[0] || 'NVIDIA GPU',
-            vram: parts[1] ? parseInt(parts[1], 10) : 0,
+            vram: parts[1] ? Number.parseInt(parts[1], 10) : 0,
           }
         })
 
@@ -121,8 +144,7 @@ export class SystemService {
 
       // If we got output but looks like an error, consider it a bad response from nvidia-smi
       return 'BAD_RESPONSE'
-    }
-    catch (error) {
+    } catch (error) {
       logger.error('Error getting nvidia-smi info:', error)
       if (error instanceof Error && error.message) {
         return { error: error.message }
@@ -131,8 +153,65 @@ export class SystemService {
     }
   }
 
+  async getExternalOllamaGpuInfo(): Promise<Array<{
+    vendor: string
+    model: string
+    vram: number
+  }> | null> {
+    try {
+      // If a remote Ollama URL is configured, use it directly without requiring a local container
+      const remoteOllamaUrl = await KVStore.getValue('ai.remoteOllamaUrl')
+      if (!remoteOllamaUrl) {
+        const containers = await this.dockerService.docker.listContainers({ all: false })
+        const ollamaContainer = containers.find((c) => c.Names.includes(`/${SERVICE_NAMES.OLLAMA}`))
+        if (!ollamaContainer) {
+          return null
+        }
+
+        const actualImage = (ollamaContainer.Image || '').toLowerCase()
+        if (actualImage.includes('ollama/ollama') || actualImage.startsWith('ollama:')) {
+          return null
+        }
+      }
+
+      const ollamaUrl = remoteOllamaUrl || (await this.dockerService.getServiceURL(SERVICE_NAMES.OLLAMA))
+      if (!ollamaUrl) {
+        return null
+      }
+
+      await axios.get(new URL('/api/tags', ollamaUrl).toString(), { timeout: 3000 })
+
+      let vramMb = 0
+      try {
+        const psResponse = await axios.get(new URL('/api/ps', ollamaUrl).toString(), {
+          timeout: 3000,
+        })
+        const loadedModels = Array.isArray(psResponse.data?.models) ? psResponse.data.models : []
+        const largestAllocation = loadedModels.reduce(
+          (max: number, model: { size_vram?: number | string }) =>
+            Math.max(max, Number(model.size_vram) || 0),
+          0
+        )
+        vramMb = largestAllocation > 0 ? Math.round(largestAllocation / (1024 * 1024)) : 0
+      } catch {}
+
+      return [
+        {
+          vendor: 'NVIDIA',
+          model: 'NVIDIA GPU (external Ollama)',
+          vram: vramMb,
+        },
+      ]
+    } catch (error) {
+      logger.info(
+        `[SystemService] External Ollama GPU probe failed: ${error instanceof Error ? error.message : error}`
+      )
+      return null
+    }
+  }
+
   async getServices({ installedOnly = true }: { installedOnly?: boolean }): Promise<ServiceSlim[]> {
-    await this._syncContainersWithDatabase() // Sync up before fetching to ensure we have the latest status
+    const statuses = await this._syncContainersWithDatabase() // Sync and reuse the fetched status list
 
     const query = Service.query()
       .orderBy('display_order', 'asc')
@@ -160,8 +239,6 @@ export class SystemService {
     if (!services || services.length === 0) {
       return []
     }
-
-    const statuses = await this.dockerService.getServicesStatus()
 
     const toReturn: ServiceSlim[] = []
 
@@ -279,17 +356,46 @@ export class SystemService {
                 graphics.controllers = nvidiaInfo.map((gpu) => ({
                   model: gpu.model,
                   vendor: gpu.vendor,
-                  bus: "",
+                  bus: '',
                   vram: gpu.vram,
                   vramDynamic: false, // assume false here, we don't actually use this field for our purposes.
                 }))
                 gpuHealth.status = 'ok'
                 gpuHealth.ollamaGpuAccessible = true
               } else if (nvidiaInfo === 'OLLAMA_NOT_FOUND') {
-                gpuHealth.status = 'ollama_not_installed'
+                // No local Ollama container — check if a remote Ollama URL is configured
+                const externalOllamaGpu = await this.getExternalOllamaGpuInfo()
+                if (externalOllamaGpu) {
+                  graphics.controllers = externalOllamaGpu.map((gpu) => ({
+                    model: gpu.model,
+                    vendor: gpu.vendor,
+                    bus: '',
+                    vram: gpu.vram,
+                    vramDynamic: false,
+                  }))
+                  gpuHealth.status = 'ok'
+                  gpuHealth.ollamaGpuAccessible = true
+                } else {
+                  gpuHealth.status = 'ollama_not_installed'
+                }
               } else {
-                gpuHealth.status = 'passthrough_failed'
-                logger.warn(`NVIDIA runtime detected but GPU passthrough failed: ${typeof nvidiaInfo === 'string' ? nvidiaInfo : JSON.stringify(nvidiaInfo)}`)
+                const externalOllamaGpu = await this.getExternalOllamaGpuInfo()
+                if (externalOllamaGpu) {
+                  graphics.controllers = externalOllamaGpu.map((gpu) => ({
+                    model: gpu.model,
+                    vendor: gpu.vendor,
+                    bus: '',
+                    vram: gpu.vram,
+                    vramDynamic: false,
+                  }))
+                  gpuHealth.status = 'ok'
+                  gpuHealth.ollamaGpuAccessible = true
+                } else {
+                  gpuHealth.status = 'passthrough_failed'
+                  logger.warn(
+                    `NVIDIA runtime detected but GPU passthrough failed: ${typeof nvidiaInfo === 'string' ? nvidiaInfo : JSON.stringify(nvidiaInfo)}`
+                  )
+                }
               }
             }
           } else {
@@ -363,9 +469,10 @@ export class SystemService {
 
       logger.info(`Current version: ${currentVersion}, Latest version: ${latestVersion}`)
 
-      const updateAvailable = process.env.NODE_ENV === 'development'
-        ? false
-        : isNewerVersion(latestVersion, currentVersion.trim(), earlyAccess)
+      const updateAvailable =
+        process.env.NODE_ENV === 'development'
+          ? false
+          : isNewerVersion(latestVersion, currentVersion.trim(), earlyAccess)
 
       // Cache the results in KVStore for frontend checks
       await KVStore.setValue('system.updateAvailable', updateAvailable)
@@ -525,14 +632,20 @@ export class SystemService {
     const k = 1024
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
     const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i]
+    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i]
   }
 
   async updateSetting(key: KVStoreKey, value: any): Promise<void> {
-    if ((value === '' || value === undefined || value === null) && KV_STORE_SCHEMA[key] === 'string') {
+    if (
+      (value === '' || value === undefined || value === null) &&
+      KV_STORE_SCHEMA[key] === 'string'
+    ) {
       await KVStore.clearValue(key)
     } else {
       await KVStore.setValue(key, value)
+    }
+    if (key === 'ai.assistantCustomName') {
+      invalidateAssistantNameCache()
     }
   }
 
@@ -542,11 +655,13 @@ export class SystemService {
    * Handles cases where a container might have been manually removed, ensuring the database reflects the actual existence of containers.
    * Containers that exist but are stopped, paused, or restarting will still be considered installed.
    *
+   * Returns the fetched service status list so callers can reuse it without a second Docker API call.
+   *
    * In Kubernetes mode, there is no Docker socket. Instead, services are considered
    * installed if their corresponding URL environment variable is configured, since
    * companion services are deployed as separate K8s pods.
    */
-  private async _syncContainersWithDatabase() {
+  private async _syncContainersWithDatabase(): Promise<{ service_name: string; status: string }[]> {
     if (DockerService.isKubernetesMode()) {
       return this._syncServicesForKubernetes()
     }
@@ -563,6 +678,11 @@ export class SystemService {
         if (service.installed) {
           // If marked as installed but container doesn't exist, mark as not installed
           if (!containerExists) {
+            // Exception: remote Ollama is configured without a local container — don't reset it
+            if (service.service_name === SERVICE_NAMES.OLLAMA) {
+              const remoteUrl = await KVStore.getValue('ai.remoteOllamaUrl')
+              if (remoteUrl) continue
+            }
             logger.warn(
               `Service ${service.service_name} is marked as installed but container does not exist. Marking as not installed.`
             )
@@ -582,8 +702,11 @@ export class SystemService {
           }
         }
       }
+
+      return serviceStatusList
     } catch (error) {
       logger.error('Error syncing containers with database:', error)
+      return []
     }
   }
 
@@ -592,7 +715,7 @@ export class SystemService {
    * which ones are available by checking if their URL environment variable is set.
    * The LLM provider (Ollama/llama-cpp) is detected via LLM_HOST or OLLAMA_HOST.
    */
-  private async _syncServicesForKubernetes() {
+  private async _syncServicesForKubernetes(): Promise<{ service_name: string; status: string }[]> {
     // Map service names to the env var that indicates they're deployed.
     // Services with `uiUrl` set will have their ui_location updated to that URL
     // so the frontend can link to them. Services without `uiUrl` (like Ollama and
@@ -610,6 +733,7 @@ export class SystemService {
       [SERVICE_NAMES.OLLAMA]: { envVar: 'LLM_HOST' },
     }
 
+    const statuses: { service_name: string; status: string }[] = []
     try {
       const allServices = await Service.all()
 
@@ -651,10 +775,18 @@ export class SystemService {
         if (changed) {
           await service.save()
         }
+
+        // K8s lifecycle is managed by the cluster — if the env var is set, the service
+        // is by definition running. Caller (getServices) uses this to populate the
+        // status field on the returned ServiceSlim.
+        if (isAvailable) {
+          statuses.push({ service_name: service.service_name, status: 'running' })
+        }
       }
     } catch (error) {
       logger.error('Error syncing services for Kubernetes:', error)
     }
+    return statuses
   }
 
   private calculateDiskUsage(diskInfo: NomadDiskInfoRaw): NomadDiskInfo[] {
@@ -705,5 +837,4 @@ export class SystemService {
         }
       })
   }
-
 }

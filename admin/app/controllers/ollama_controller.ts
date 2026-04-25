@@ -1,11 +1,15 @@
 import { ChatService } from '#services/chat_service'
+import { DockerService } from '#services/docker_service'
 import { OllamaService } from '#services/ollama_service'
 import { RagService } from '#services/rag_service'
+import Service from '#models/service'
+import KVStore from '#models/kv_store'
 import { modelNameSchema } from '#validators/download'
 import { chatSchema, getAvailableModelsSchema } from '#validators/ollama'
 import { inject } from '@adonisjs/core'
 import type { HttpContext } from '@adonisjs/core/http'
-import { DEFAULT_QUERY_REWRITE_MODEL, RAG_CONTEXT_LIMITS, SYSTEM_PROMPTS } from '../../constants/ollama.js'
+import { RAG_CONTEXT_LIMITS, SYSTEM_PROMPTS } from '../../constants/ollama.js'
+import { SERVICE_NAMES } from '../../constants/service_names.js'
 import logger from '@adonisjs/core/services/logger'
 import type { ChatMessage } from '../services/llm/llm_provider.js'
 
@@ -13,6 +17,7 @@ import type { ChatMessage } from '../services/llm/llm_provider.js'
 export default class OllamaController {
   constructor(
     private chatService: ChatService,
+    private dockerService: DockerService,
     private ollamaService: OllamaService,
     private ragService: RagService
   ) { }
@@ -54,7 +59,7 @@ export default class OllamaController {
 
       // Query rewriting for better RAG retrieval with manageable context
       // Will return user's latest message if no rewriting is needed
-      const rewrittenQuery = await this.rewriteQueryWithContext(reqData.messages)
+      const rewrittenQuery = await this.rewriteQueryWithContext(reqData.messages, reqData.model)
 
       logger.debug(`[OllamaController] Rewritten query for RAG: "${rewrittenQuery}"`)
       if (rewrittenQuery) {
@@ -72,10 +77,10 @@ export default class OllamaController {
           const { maxResults, maxTokens } = this.getContextLimitsForModel(reqData.model)
           let trimmedDocs = relevantDocs.slice(0, maxResults)
 
-          // Apply token cap if set (estimate ~4 chars per token)
+          // Apply token cap if set (estimate ~3.5 chars per token)
           // Always include the first (most relevant) result — the cap only gates subsequent results
           if (maxTokens > 0) {
-            const charCap = maxTokens * 4
+            const charCap = maxTokens * 3.5
             let totalChars = 0
             trimmedDocs = trimmedDocs.filter((doc, idx) => {
               totalChars += doc.text.length
@@ -103,6 +108,19 @@ export default class OllamaController {
         }
       }
 
+      // If system messages are large (e.g. due to RAG context), request a context window big
+      // enough to fit them. Ollama respects num_ctx per-request; LM Studio ignores it gracefully.
+      const systemChars = reqData.messages
+        .filter((m) => m.role === 'system')
+        .reduce((sum, m) => sum + m.content.length, 0)
+      const estimatedSystemTokens = Math.ceil(systemChars / 3.5)
+      let numCtx: number | undefined
+      if (estimatedSystemTokens > 3000) {
+        const needed = estimatedSystemTokens + 2048 // leave room for conversation + response
+        numCtx = [8192, 16384, 32768, 65536].find((n) => n >= needed) ?? 65536
+        logger.debug(`[OllamaController] Large system prompt (~${estimatedSystemTokens} tokens), requesting num_ctx: ${numCtx}`)
+      }
+
       // Check if the model supports "thinking" capability for enhanced response generation
       // If gpt-oss model, it requires a text param for "think" https://docs.ollama.com/api/chat
       const thinkingCapability = await this.ollamaService.checkModelHasThinking(reqData.model)
@@ -124,7 +142,7 @@ export default class OllamaController {
       if (reqData.stream) {
         logger.debug(`[OllamaController] Initiating streaming response for model: "${reqData.model}" with think: ${think}`)
         // Headers already flushed above
-        const stream = await this.ollamaService.chatStream({ ...ollamaRequest, think })
+        const stream = await this.ollamaService.chatStream({ ...ollamaRequest, think, numCtx })
         let fullContent = ''
         for await (const chunk of stream) {
           if (chunk.message?.content) {
@@ -139,7 +157,7 @@ export default class OllamaController {
           await this.chatService.addMessage(sessionId, 'assistant', fullContent)
           const messageCount = await this.chatService.getMessageCount(sessionId)
           if (messageCount <= 2 && userContent) {
-            this.chatService.generateTitle(sessionId, userContent, fullContent).catch((err) => {
+            this.chatService.generateTitle(sessionId, userContent, fullContent, reqData.model).catch((err) => {
               logger.error(`[OllamaController] Title generation failed: ${err instanceof Error ? err.message : err}`)
             })
           }
@@ -148,13 +166,13 @@ export default class OllamaController {
       }
 
       // Non-streaming (legacy) path
-      const result = await this.ollamaService.chat({ ...ollamaRequest, think })
+      const result = await this.ollamaService.chat({ ...ollamaRequest, think, numCtx })
 
       if (sessionId && result?.message?.content) {
         await this.chatService.addMessage(sessionId, 'assistant', result.message.content)
         const messageCount = await this.chatService.getMessageCount(sessionId)
         if (messageCount <= 2 && userContent) {
-          this.chatService.generateTitle(sessionId, userContent, result.message.content).catch((err) => {
+          this.chatService.generateTitle(sessionId, userContent, result.message.content, reqData.model).catch((err) => {
             logger.error(`[OllamaController] Title generation failed: ${err instanceof Error ? err.message : err}`)
           })
         }
@@ -168,6 +186,143 @@ export default class OllamaController {
         return
       }
       throw error
+    }
+  }
+
+  async remoteStatus() {
+    const remoteUrl = await KVStore.getValue('ai.remoteOllamaUrl')
+    if (!remoteUrl) {
+      return { configured: false, connected: false }
+    }
+    try {
+      const testResponse = await fetch(`${remoteUrl.replace(/\/$/, '')}/v1/models`, {
+        signal: AbortSignal.timeout(3000),
+      })
+      return { configured: true, connected: testResponse.ok }
+    } catch {
+      return { configured: true, connected: false }
+    }
+  }
+
+  async configureRemote({ request, response }: HttpContext) {
+    const remoteUrl: string | null = request.input('remoteUrl', null)
+
+    const ollamaService = await Service.query().where('service_name', SERVICE_NAMES.OLLAMA).first()
+    if (!ollamaService) {
+      return response.status(404).send({ success: false, message: 'Ollama service record not found.' })
+    }
+
+    // Clear path: null or empty URL removes remote config. If a local nomad_ollama container
+    // still exists (user had previously installed AI Assistant locally), restart it and keep
+    // the service marked installed. Otherwise fall back to uninstalled.
+    if (!remoteUrl || remoteUrl.trim() === '') {
+      await KVStore.clearValue('ai.remoteOllamaUrl')
+      const hasLocalContainer = await this._startLocalOllamaContainerIfExists()
+      ollamaService.installed = hasLocalContainer
+      ollamaService.installation_status = 'idle'
+      await ollamaService.save()
+      return {
+        success: true,
+        message: hasLocalContainer
+          ? 'Remote Ollama cleared. Local Ollama container restored.'
+          : 'Remote Ollama configuration cleared.',
+      }
+    }
+
+    // Validate URL format
+    if (!remoteUrl.startsWith('http')) {
+      return response.status(400).send({
+        success: false,
+        message: 'Invalid URL. Must start with http:// or https://',
+      })
+    }
+
+    // Test connectivity via OpenAI-compatible /v1/models endpoint (works with Ollama, LM Studio, llama.cpp, etc.)
+    try {
+      const testResponse = await fetch(`${remoteUrl.replace(/\/$/, '')}/v1/models`, {
+        signal: AbortSignal.timeout(5000),
+      })
+      if (!testResponse.ok) {
+        return response.status(400).send({
+          success: false,
+          message: `Could not connect to ${remoteUrl} (HTTP ${testResponse.status}). Make sure the server is running and accessible. For Ollama, start it with OLLAMA_HOST=0.0.0.0.`,
+        })
+      }
+    } catch (error) {
+      return response.status(400).send({
+        success: false,
+        message: `Could not connect to ${remoteUrl}. Make sure the server is running and reachable. For Ollama, start it with OLLAMA_HOST=0.0.0.0.`,
+      })
+    }
+
+    // Save remote URL and mark service as installed
+    await KVStore.setValue('ai.remoteOllamaUrl', remoteUrl.trim())
+    ollamaService.installed = true
+    ollamaService.installation_status = 'idle'
+    await ollamaService.save()
+
+    // Stop the local nomad_ollama container (if running) so it doesn't compete with the
+    // remote host for GPU / port 11434. Preserves the container and its models volume.
+    await this._stopLocalOllamaContainer()
+
+    // Install Qdrant if not already installed (fire-and-forget)
+    const qdrantService = await Service.query().where('service_name', SERVICE_NAMES.QDRANT).first()
+    if (qdrantService && !qdrantService.installed) {
+      this.dockerService.createContainerPreflight(SERVICE_NAMES.QDRANT).catch((error) => {
+        logger.error('[OllamaController] Failed to start Qdrant preflight:', error)
+      })
+    }
+
+    // Mirror post-install side effects: disable suggestions, trigger docs discovery
+    await KVStore.setValue('chat.suggestionsEnabled', false)
+    this.ragService.discoverNomadDocs().catch((error) => {
+      logger.error('[OllamaController] Failed to discover Nomad docs:', error)
+    })
+
+    return { success: true, message: 'Remote Ollama configured.' }
+  }
+
+  private async _stopLocalOllamaContainer(): Promise<void> {
+    try {
+      const containers = await this.dockerService.docker.listContainers({ all: true })
+      const ollamaContainer = containers.find((c) =>
+        c.Names.includes(`/${SERVICE_NAMES.OLLAMA}`)
+      )
+      if (!ollamaContainer || ollamaContainer.State !== 'running') {
+        return
+      }
+      await this.dockerService.docker.getContainer(ollamaContainer.Id).stop()
+      this.dockerService.invalidateServicesStatusCache()
+      logger.info('[OllamaController] Stopped local nomad_ollama (remote Ollama configured)')
+    } catch (error: any) {
+      logger.error(
+        { err: error },
+        '[OllamaController] Failed to stop local nomad_ollama; remote Ollama is still active'
+      )
+    }
+  }
+
+  private async _startLocalOllamaContainerIfExists(): Promise<boolean> {
+    try {
+      const containers = await this.dockerService.docker.listContainers({ all: true })
+      const ollamaContainer = containers.find((c) =>
+        c.Names.includes(`/${SERVICE_NAMES.OLLAMA}`)
+      )
+      if (!ollamaContainer) {
+        return false
+      }
+      if (ollamaContainer.State !== 'running') {
+        await this.dockerService.docker.getContainer(ollamaContainer.Id).start()
+        this.dockerService.invalidateServicesStatusCache()
+        logger.info('[OllamaController] Started local nomad_ollama (remote Ollama cleared)')
+      }
+      return true
+    } catch (error: any) {
+      logger.error(
+        { err: error },
+        '[OllamaController] Failed to start local nomad_ollama on remote clear'
+      )
+      return false
     }
   }
 
@@ -213,9 +368,18 @@ export default class OllamaController {
   }
 
   private async rewriteQueryWithContext(
-    messages: ChatMessage[]
+    messages: ChatMessage[],
+    model: string
   ): Promise<string | null> {
+    const lastUserMessage = [...messages].reverse().find(msg => msg.role === 'user')
+
     try {
+      // Skip the entire RAG pipeline if there are no documents to search
+      const hasDocuments = await this.ragService.hasDocuments()
+      if (!hasDocuments) {
+        return null
+      }
+
       // Get recent conversation history (last 6 messages for 3 turns)
       const recentMessages = messages.slice(-6)
 
@@ -223,7 +387,7 @@ export default class OllamaController {
       // little RAG benefit until there is enough context to matter.
       const userMessages = recentMessages.filter(msg => msg.role === 'user')
       if (userMessages.length <= 2) {
-        return userMessages[userMessages.length - 1]?.content || null
+        return lastUserMessage?.content || null
       }
 
       const conversationContext = recentMessages
@@ -237,17 +401,8 @@ export default class OllamaController {
         })
         .join('\n')
 
-      const installedModels = await this.ollamaService.getModels(true)
-      const rewriteModelAvailable = installedModels?.some(model => model.name === DEFAULT_QUERY_REWRITE_MODEL)
-      if (!rewriteModelAvailable) {
-        logger.warn(`[RAG] Query rewrite model "${DEFAULT_QUERY_REWRITE_MODEL}" not available. Skipping query rewriting.`)
-        const lastUserMessage = [...messages].reverse().find(msg => msg.role === 'user')
-        return lastUserMessage?.content || null
-      }
-
-      // FUTURE ENHANCEMENT: allow the user to specify which model to use for rewriting
       const response = await this.ollamaService.chat({
-        model: DEFAULT_QUERY_REWRITE_MODEL,
+        model,
         messages: [
           {
             role: 'system' as const,
@@ -268,7 +423,6 @@ export default class OllamaController {
         `[RAG] Query rewriting failed: ${error instanceof Error ? error.message : error}`
       )
       // Fallback to last user message if rewriting fails
-      const lastUserMessage = [...messages].reverse().find(msg => msg.role === 'user')
       return lastUserMessage?.content || null
     }
   }
