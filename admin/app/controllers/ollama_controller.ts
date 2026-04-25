@@ -142,7 +142,7 @@ export default class OllamaController {
       if (reqData.stream) {
         logger.debug(`[OllamaController] Initiating streaming response for model: "${reqData.model}" with think: ${think}`)
         // Headers already flushed above
-        const stream = await this.ollamaService.chatStream({ ...ollamaRequest, think, numCtx })
+        const stream = await this.ollamaService.chatStream({ ...ollamaRequest, think, options: numCtx ? { num_ctx: numCtx } : undefined })
         let fullContent = ''
         for await (const chunk of stream) {
           if (chunk.message?.content) {
@@ -166,7 +166,7 @@ export default class OllamaController {
       }
 
       // Non-streaming (legacy) path
-      const result = await this.ollamaService.chat({ ...ollamaRequest, think, numCtx })
+      const result = await this.ollamaService.chat({ ...ollamaRequest, think, options: numCtx ? { num_ctx: numCtx } : undefined })
 
       if (sessionId && result?.message?.content) {
         await this.chatService.addMessage(sessionId, 'assistant', result.message.content)

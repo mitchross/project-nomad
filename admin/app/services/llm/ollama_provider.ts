@@ -136,7 +136,12 @@ export class OllamaProvider implements LLMProvider {
     return true
   }
 
-  async pullModel(model: string, progressCallback?: (percent: number) => void): Promise<{ success: boolean; message: string }> {
+  async pullModel(
+    model: string,
+    progressCallback?: (percent: number, bytes?: { downloadedBytes?: number; totalBytes?: number }) => void,
+    abortSignal?: AbortSignal,
+    _jobId?: string
+  ): Promise<{ success: boolean; message: string }> {
     try {
       const client = await this._ensureClient()
 
@@ -149,10 +154,14 @@ export class OllamaProvider implements LLMProvider {
 
       const downloadStream = await client.pull({ model, stream: true })
       for await (const chunk of downloadStream) {
+        if (abortSignal?.aborted) {
+          logger.info(`[OllamaProvider] Download of "${model}" aborted by signal.`)
+          return { success: false, message: 'Download cancelled.' }
+        }
         if (chunk.completed && chunk.total) {
           const percent = parseFloat(((chunk.completed / chunk.total) * 100).toFixed(2))
           if (progressCallback) {
-            progressCallback(percent)
+            progressCallback(percent, { downloadedBytes: chunk.completed, totalBytes: chunk.total })
           }
         }
       }

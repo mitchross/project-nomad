@@ -72,8 +72,23 @@ export interface LLMProvider {
    */
   supportsNativeBenchmark(): boolean
 
-  /** Pull/download a model (Ollama only) */
-  pullModel?(model: string, progressCallback?: (percent: number) => void): Promise<{ success: boolean; message: string }>
+  /**
+   * Pull/download a model (Ollama only).
+   *
+   * progressCallback receives percent (0-100) and an optional bytes object with
+   * downloadedBytes/totalBytes. abortSignal allows cancellation. jobId is opaque
+   * to the provider — passed through for logging only.
+   *
+   * TODO: actually wire abort + bytes through OllamaProvider (upstream commits
+   * 6c33a96 + c8cb79a). For now, the extra params are accepted to keep callers
+   * compiling but the OllamaProvider implementation may ignore them.
+   */
+  pullModel?(
+    model: string,
+    progressCallback?: (percent: number, bytes?: { downloadedBytes?: number; totalBytes?: number }) => void,
+    abortSignal?: AbortSignal,
+    jobId?: string
+  ): Promise<{ success: boolean; message: string }>
 
   /** Delete a model (Ollama only) */
   deleteModel?(model: string): Promise<void>
