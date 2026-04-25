@@ -18,6 +18,14 @@ const NOMAD_MODELS_API_PATH = '/api/v1/ollama/models'
 const MODELS_CACHE_FILE = path.join(process.cwd(), 'storage', 'ollama-models-cache.json')
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 hours
 
+/**
+ * Despite the name, this is a thin facade over LLMProvider — it can serve
+ * either Ollama or any OpenAI-compatible backend (e.g. llama-cpp), depending
+ * on LLM_PROVIDER. The class name is kept for now to avoid touching every
+ * consumer; rename to LLMService if the indirection ever bites.
+ *
+ * Actual Ollama-vs-OpenAI behavior lives in admin/app/services/llm/*.
+ */
 @inject()
 export class OllamaService {
   private _provider: LLMProvider | null = null

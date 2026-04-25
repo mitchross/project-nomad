@@ -726,9 +726,9 @@ export class SystemService {
       // survival, etc.) rather than the raw Kiwix server which only shows loaded ZIMs.
       [SERVICE_NAMES.KIWIX]: { envVar: 'KIWIX_URL', uiUrl: '/settings/zim/remote-explorer' },
       // Kolibri: link to NOMAD's Content Explorer for education content
-      [SERVICE_NAMES.KOLIBRI]: { envVar: 'KOLIBRI_URL', uiUrl: process.env.KOLIBRI_URL },
-      [SERVICE_NAMES.CYBERCHEF]: { envVar: 'CYBERCHEF_URL', uiUrl: process.env.CYBERCHEF_URL },
-      [SERVICE_NAMES.FLATNOTES]: { envVar: 'FLATNOTES_URL', uiUrl: process.env.FLATNOTES_URL },
+      [SERVICE_NAMES.KOLIBRI]: { envVar: 'KOLIBRI_URL', uiUrl: env.get('KOLIBRI_URL') },
+      [SERVICE_NAMES.CYBERCHEF]: { envVar: 'CYBERCHEF_URL', uiUrl: env.get('CYBERCHEF_URL') },
+      [SERVICE_NAMES.FLATNOTES]: { envVar: 'FLATNOTES_URL', uiUrl: env.get('FLATNOTES_URL') },
       [SERVICE_NAMES.QDRANT]: { envVar: 'QDRANT_HOST' },
       [SERVICE_NAMES.OLLAMA]: { envVar: 'LLM_HOST' },
     }
