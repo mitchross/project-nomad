@@ -7,9 +7,11 @@
  */
 
 import { Ollama } from 'ollama'
+import axios from 'axios'
 import logger from '@adonisjs/core/services/logger'
 import env from '#start/env'
 import { SERVICE_NAMES } from '../../../constants/service_names.js'
+import { EMBEDDING_MODEL_NAME } from '../../../constants/ollama.js'
 import type {
   LLMProvider,
   ChatRequest,
@@ -23,12 +25,16 @@ export class OllamaProvider implements LLMProvider {
   readonly providerName = 'ollama'
   private ollama: Ollama | null = null
   private initPromise: Promise<void> | null = null
+  // Raw base URL (no trailing slash) for the Ollama-native endpoints the SDK
+  // doesn't wrap (/api/ps, /api/generate). Captured during _initialize().
+  private resolvedHost: string | null = null
 
   private async _initialize() {
     if (!this.initPromise) {
       this.initPromise = (async () => {
         const host = env.get('LLM_HOST') || env.get('OLLAMA_HOST')
         if (host) {
+          this.resolvedHost = host.replace(/\/+$/, '')
           this.ollama = new Ollama({ host })
           return
         }
@@ -39,6 +45,7 @@ export class OllamaProvider implements LLMProvider {
         if (!url) {
           throw new Error('Ollama service is not installed or running.')
         }
+        this.resolvedHost = url.replace(/\/+$/, '')
         this.ollama = new Ollama({ host: url })
       })().catch((err) => {
         // Reset so the next call retries instead of returning the failed promise forever
@@ -187,5 +194,79 @@ export class OllamaProvider implements LLMProvider {
     } catch {
       return false
     }
+  }
+
+  /**
+   * True if Ollama is currently running an embedding model with non-zero VRAM
+   * (GPU-offloaded). Returns false if CPU-only, not loaded, or /api/ps is
+   * unreachable — fail closed so callers over-pace rather than risk CPU
+   * saturation. Only the Ollama-native /api/ps endpoint exposes placement info.
+   */
+  async isEmbeddingGpuAccelerated(): Promise<boolean> {
+    try {
+      await this._ensureClient()
+      if (!this.resolvedHost) return false
+      const response = await axios.get(`${this.resolvedHost}/api/ps`, { timeout: 5000 })
+      const models: Array<{ name?: string; size_vram?: number }> = response.data?.models ?? []
+      return models.some(
+        (m) => m.name?.toLowerCase().includes('embed') && (m.size_vram ?? 0) > 0
+      )
+    } catch (err: any) {
+      logger.warn(
+        `[OllamaProvider] Could not check embedding placement via /api/ps: ${err?.message ?? err}`
+      )
+      return false
+    }
+  }
+
+  /**
+   * Fire `keep_alive: 0` against every loaded model except the embedding model
+   * and `targetModel`. Best-effort: /api/ps + parallel unload hints; network or
+   * Ollama errors are swallowed and logged. Returns the models that were sent
+   * the unload hint. `keep_alive: 0` is a post-completion hint, so in-flight
+   * inference is never interrupted.
+   */
+  async unloadAllChatModelsExcept(targetModel: string | null): Promise<string[]> {
+    let loadedModels: string[] = []
+    try {
+      await this._ensureClient()
+      if (!this.resolvedHost) return []
+      const response = await axios.get(`${this.resolvedHost}/api/ps`, { timeout: 5000 })
+      loadedModels = (response.data?.models ?? [])
+        .map((m: { name?: string }) => m.name)
+        .filter((name: unknown): name is string => typeof name === 'string')
+    } catch (err: any) {
+      logger.warn(
+        `[OllamaProvider] unloadAllChatModelsExcept: /api/ps unreachable, skipping unload sweep: ${err?.message ?? err}`
+      )
+      return []
+    }
+
+    const toUnload = loadedModels.filter(
+      (name) => name !== EMBEDDING_MODEL_NAME && name !== targetModel
+    )
+
+    await Promise.all(
+      toUnload.map(async (modelName) => {
+        try {
+          await axios.post(
+            `${this.resolvedHost}/api/generate`,
+            { model: modelName, prompt: '', keep_alive: 0 },
+            { timeout: 10000 }
+          )
+        } catch (err: any) {
+          logger.warn(
+            `[OllamaProvider] Failed to send unload hint for ${modelName}: ${err?.message ?? err}`
+          )
+        }
+      })
+    )
+
+    if (toUnload.length > 0) {
+      logger.info(
+        `[OllamaProvider] Sent unload hint for ${toUnload.length} chat model(s): ${toUnload.join(', ')}`
+      )
+    }
+    return toUnload
   }
 }

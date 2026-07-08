@@ -96,6 +96,22 @@ export interface LLMProvider {
   /** Check if a model supports "thinking" capability */
   checkModelHasThinking?(modelName: string): Promise<boolean>
 
+  /**
+   * Whether the embedding model is currently GPU-offloaded (non-zero VRAM).
+   * Ollama-only signal used to pace CPU-bound ingestion. Providers that can't
+   * report placement (OpenAI-compatible backends) should omit this — callers
+   * treat "not implemented" as "don't pace".
+   */
+  isEmbeddingGpuAccelerated?(): Promise<boolean>
+
+  /**
+   * Unload every loaded chat model except the embedding model and `targetModel`,
+   * enforcing the "at most one chat model resident in VRAM" invariant. Ollama-only;
+   * OpenAI-compatible backends manage their own memory and should omit this.
+   * Returns the names of the models that were sent an unload hint.
+   */
+  unloadAllChatModelsExcept?(targetModel: string | null): Promise<string[]>
+
   /** Provider identifier */
   readonly providerName: string
 }

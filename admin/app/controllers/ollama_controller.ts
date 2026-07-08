@@ -5,7 +5,8 @@ import { RagService } from '#services/rag_service'
 import Service from '#models/service'
 import KVStore from '#models/kv_store'
 import { modelNameSchema } from '#validators/download'
-import { chatSchema, getAvailableModelsSchema } from '#validators/ollama'
+import { chatSchema, getAvailableModelsSchema, unloadChatModelsSchema } from '#validators/ollama'
+import { assertNotCloudMetadataUrl } from '#validators/common'
 import { inject } from '@adonisjs/core'
 import type { HttpContext } from '@adonisjs/core/http'
 import { RAG_CONTEXT_LIMITS, SYSTEM_PROMPTS } from '../../constants/ollama.js'
@@ -31,6 +32,19 @@ export default class OllamaController {
       limit: reqData.limit || 15,
       force: reqData.force,
     })
+  }
+
+  /**
+   * Send Ollama `keep_alive: 0` hints to every currently-loaded chat model
+   * except the embedding model and (optionally) a target model to preserve.
+   * Used by the chat UI to enforce the "one chat model at a time" invariant
+   * on model-switch, session-switch, and page-load. Best-effort: a failure
+   * here should not block the calling flow.
+   */
+  async unloadChatModels({ request, response }: HttpContext) {
+    const { targetModel } = await request.validateUsing(unloadChatModelsSchema)
+    const unloaded = await this.ollamaService.unloadAllChatModelsExcept(targetModel ?? null)
+    return response.status(200).json({ unloaded })
   }
 
   async chat({ request, response }: HttpContext) {
@@ -92,8 +106,17 @@ export default class OllamaController {
             `[RAG] Injecting ${trimmedDocs.length}/${relevantDocs.length} results (model: ${reqData.model}, maxResults: ${maxResults}, maxTokens: ${maxTokens || 'unlimited'})`
           )
 
+          // Label each context block with its source title when available (a neutral,
+          // honest provenance signal) but never the raw relevance score — nomic cosine
+          // scores for genuinely relevant passages sit ~0.4-0.6, and surfacing e.g.
+          // "42%" primes the model to distrust correct context. Scores stay in the logs
+          // above for debugging.
           const contextText = trimmedDocs
-            .map((doc, idx) => `[Context ${idx + 1}] (Relevance: ${(doc.score * 100).toFixed(1)}%)\n${doc.text}`)
+            .map((doc, idx) => {
+              const title = doc.metadata?.full_title || doc.metadata?.article_title
+              const label = title ? `[Context ${idx + 1} — ${title}]` : `[Context ${idx + 1}]`
+              return `${label}\n${doc.text}`
+            })
             .join('\n\n')
 
           const systemMessage = {
@@ -229,11 +252,12 @@ export default class OllamaController {
       }
     }
 
-    // Validate URL format
-    if (!remoteUrl.startsWith('http')) {
+    try {
+      assertNotCloudMetadataUrl(remoteUrl)
+    } catch (err) {
       return response.status(400).send({
         success: false,
-        message: 'Invalid URL. Must start with http:// or https://',
+        message: err instanceof Error ? err.message : 'Invalid URL.',
       })
     }
 
@@ -383,10 +407,15 @@ export default class OllamaController {
       // Get recent conversation history (last 6 messages for 3 turns)
       const recentMessages = messages.slice(-6)
 
-      // Skip rewriting for short conversations. Rewriting adds latency with
-      // little RAG benefit until there is enough context to matter.
+      // Skip rewriting on the very first turn — with only one user message
+      // there is no prior context to fold in, so the rewrite would just echo
+      // the message back at the cost of an extra LLM round-trip. From the
+      // first follow-up onward we need the rewrite so the RAG query carries
+      // entities and topics from earlier turns ("the bars" → "Hershey's bars
+      // chocolate poisoning dog"); without it, embeddings match nothing and
+      // the assistant loses the thread.
       const userMessages = recentMessages.filter(msg => msg.role === 'user')
-      if (userMessages.length <= 2) {
+      if (userMessages.length < 2) {
         return lastUserMessage?.content || null
       }
 
