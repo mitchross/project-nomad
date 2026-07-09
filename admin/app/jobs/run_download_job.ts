@@ -9,7 +9,6 @@ import { MapService } from '#services/map_service'
 import { RagService } from '#services/rag_service'
 import { OllamaService } from '#services/ollama_service'
 import { EmbedFileJob } from './embed_file_job.js'
-import env from '#start/env'
 import { basename, join, resolve, sep } from 'node:path'
 import { ZIM_STORAGE_PATH } from '../utils/fs.js'
 
@@ -210,14 +209,9 @@ export class RunDownloadJob {
               await zimService.downloadRemoteSuccessCallback([url], true)
 
               // Only touch the knowledge base if an embedding backend is
-              // configured for this deployment — Ollama (local/remote/K8s), an
-              // OpenAI-compatible provider (vLLM/llama.cpp via LLM_HOST), or a
-              // dedicated EMBEDDING_HOST.
-              const embeddingConfigured =
-                !!env.get('EMBEDDING_HOST') ||
-                env.get('LLM_PROVIDER') === 'openai' ||
-                !!(await dockerService.getServiceURL('nomad_ollama'))
-              if (embeddingConfigured) {
+              // configured for this deployment (see
+              // OllamaService.isEmbeddingBackendConfigured for the shapes).
+              if (await OllamaService.isEmbeddingBackendConfigured(dockerService)) {
                 // A content UPDATE replaces a prior file at a DIFFERENT path
                 // (version is in the filename). A fresh install has no prior row;
                 // a same-version re-download keeps the same path. The two cases

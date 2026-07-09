@@ -57,7 +57,14 @@ export default class SettingsController {
   async models({ inertia }: HttpContext) {
     // Only fetch the Ollama model catalog if the provider supports model management
     // (i.e. Ollama). For OpenAI-compatible providers, model installation is external.
-    const supportsModelMgmt = this.ollamaService.provider.supportsModelManagement()
+    // The provider getter throws on a misconfig (LLM_PROVIDER=openai without
+    // LLM_HOST) — render the page degraded rather than 500ing settings.
+    let supportsModelMgmt = false
+    try {
+      supportsModelMgmt = this.ollamaService.provider.supportsModelManagement()
+    } catch {
+      // treat as no model management
+    }
     const availableModels = supportsModelMgmt
       ? await this.ollamaService.getAvailableModels({
           sort: 'pulls',

@@ -70,16 +70,23 @@ export class EmbedFileJob {
     try {
       // Ensure the embedding backend and vector store are configured/reachable.
       // Deployment-agnostic:
-      //  - An OpenAI-compatible provider (vLLM, llama.cpp) is configured via
-      //    LLM_HOST and has NO container to discover, so the "not installed"
-      //    permanent-skip only applies to Ollama-style providers that support
-      //    model management. For those, an unresolvable service URL genuinely
-      //    means AI Assistant isn't installed.
+      //  - LLM_PROVIDER=openai without LLM_HOST is a config error that can
+      //    never self-heal — permanent skip instead of a 30x retry storm.
+      //  - An env-configured backend (LLM_HOST/OLLAMA_HOST — vLLM, llama.cpp,
+      //    or a remote/K8s Ollama) has no local container to discover; the
+      //    "not installed" permanent-skip only applies when we'd genuinely
+      //    need the local AI Assistant container and it isn't there.
       //  - Qdrant is resolved the same way RagService does: QDRANT_HOST env
       //    first (K8s / bring-your-own), then Docker container discovery.
       // Use UnrecoverableError for "not installed" so BullMQ won't retry —
       // retrying 30x when the backend doesn't exist just wastes Redis connections.
-      if (ollamaService.provider.supportsModelManagement()) {
+      if (env.get('LLM_PROVIDER') === 'openai' && !env.get('LLM_HOST')) {
+        logger.warn('[EmbedFileJob] LLM_PROVIDER=openai but LLM_HOST is not set. Skipping embedding for: %s', fileName)
+        throw new UnrecoverableError('LLM_PROVIDER=openai requires LLM_HOST to be configured.')
+      }
+
+      const hasEnvConfiguredHost = !!env.get('LLM_HOST') || !!env.get('OLLAMA_HOST')
+      if (!hasEnvConfiguredHost && !env.get('EMBEDDING_HOST')) {
         const ollamaUrl = await dockerService.getServiceURL('nomad_ollama')
         if (!ollamaUrl) {
           logger.warn('[EmbedFileJob] Ollama is not installed. Skipping embedding for: %s', fileName)
@@ -87,6 +94,11 @@ export class EmbedFileJob {
         }
       }
 
+      // Readiness probe. For Ollama-style providers listModels throws while the
+      // backend is starting, landing in the catch as a plain (retryable) error.
+      // OpenAI-compatible providers swallow list errors and return [], so this
+      // gate is a no-op there — a transiently-down backend surfaces later in
+      // embed() as a plain error and gets the same bounded BullMQ retries.
       const existingModels = await ollamaService.getModels()
       if (!existingModels) {
         logger.warn('[EmbedFileJob] AI service not ready yet. Will retry...')

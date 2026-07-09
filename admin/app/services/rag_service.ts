@@ -318,12 +318,18 @@ export class RagService {
       return this.resolvedEmbeddingModel
     }
 
-    // Ollama (local or remote): verify presence, optionally auto-pull, and fall
-    // back to any installed nomic-embed-text tag.
+    // Ollama (local or remote): verify presence and optionally auto-pull.
+    // The any-nomic-tag fallback only applies when the CONFIGURED model is
+    // itself a nomic tag — falling back from a non-nomic EMBEDDING_MODEL to a
+    // stray installed nomic model would silently embed at the wrong dimension
+    // vs EMBEDDING_DIMENSIONS and corrupt/fail Qdrant upserts.
     const allModels = await this.ollamaService.getModels(true)
+    const nomicFallbackAllowed = configured.toLowerCase().includes('nomic-embed-text')
     const embeddingModel =
       allModels.find((model) => model.name === configured) ??
-      allModels.find((model) => model.name.toLowerCase().includes('nomic-embed-text'))
+      (nomicFallbackAllowed
+        ? allModels.find((model) => model.name.toLowerCase().includes('nomic-embed-text'))
+        : undefined)
 
     if (!embeddingModel) {
       if (!autoDownload) {

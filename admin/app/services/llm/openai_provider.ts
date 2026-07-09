@@ -60,10 +60,27 @@ export class OpenAIProvider implements LLMProvider {
     if (!data.choices?.length || !data.choices[0].message) {
       throw new Error('Unexpected response format from OpenAI API: no choices returned')
     }
+
+    // Reasoning models on OpenAI-compatible backends surface reasoning either in
+    // a dedicated field (vLLM: reasoning_content; some servers: thinking) or
+    // inline as <think>…</think> in the content. Separate it out so reasoning
+    // never leaks into the visible reply — or into chat titles/suggestions,
+    // which are generated through this non-streaming path.
+    const message = data.choices[0].message
+    const nativeThinking: string = message.reasoning_content ?? message.thinking ?? ''
+    let content: string = message.content ?? ''
+    let parsedThinking = ''
+    content = content.replace(/<think>([\s\S]*?)<\/think>/g, (_m, inner) => {
+      parsedThinking += inner
+      return ''
+    })
+    const thinking = nativeThinking + parsedThinking
+
     return {
       message: {
-        role: data.choices[0].message.role,
-        content: data.choices[0].message.content,
+        role: message.role,
+        content,
+        thinking: thinking.length > 0 ? thinking : undefined,
       },
       done: true,
     }
@@ -93,58 +110,100 @@ export class OpenAIProvider implements LLMProvider {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
 
-    return {
-      [Symbol.asyncIterator]() {
-        let buffer = ''
-        return {
-          async next(): Promise<IteratorResult<ChatStreamChunk>> {
-            while (true) {
-              // Process any complete lines in buffer
-              const lineEnd = buffer.indexOf('\n')
-              if (lineEnd !== -1) {
-                const line = buffer.slice(0, lineEnd).trim()
-                buffer = buffer.slice(lineEnd + 1)
-
-                if (line === 'data: [DONE]') {
-                  return { done: true, value: undefined as any }
-                }
-
-                if (line.startsWith('data: ')) {
-                  try {
-                    const json = JSON.parse(line.slice(6))
-                    const delta = json.choices?.[0]?.delta
-                    const finishReason = json.choices?.[0]?.finish_reason
-
-                    if (delta?.content || finishReason === 'stop') {
-                      return {
-                        done: false,
-                        value: {
-                          message: {
-                            role: delta?.role || 'assistant',
-                            content: delta?.content || '',
-                          },
-                          done: finishReason === 'stop',
-                        },
-                      }
-                    }
-                  } catch {
-                    // Skip malformed JSON lines
-                  }
-                }
-                continue
-              }
-
-              // Read more data
-              const { done, value } = await reader.read()
-              if (done) {
-                return { done: true, value: undefined as any }
-              }
-              buffer += decoder.decode(value, { stream: true })
-            }
-          },
-        }
-      },
+    // Returns how many trailing chars of `text` could be the start of `tag`
+    function partialTagSuffix(tag: string, text: string): number {
+      for (let len = Math.min(tag.length - 1, text.length); len >= 1; len--) {
+        if (text.endsWith(tag.slice(0, len))) return len
+      }
+      return 0
     }
+
+    async function* normalize(): AsyncGenerator<ChatStreamChunk> {
+      // Stateful parser for <think>...</think> tags that may be split across
+      // chunks. Reasoning models on OpenAI-compatible backends surface
+      // reasoning either in a dedicated delta field (vLLM: reasoning_content;
+      // some servers: thinking) or inline in delta.content — separate it out
+      // so reasoning renders in the UI's Reasoning panel instead of leaking
+      // into the visible reply.
+      let lineBuffer = ''
+      let tagBuffer = ''
+      let inThink = false
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) return
+        lineBuffer += decoder.decode(value, { stream: true })
+
+        let lineEnd: number
+        while ((lineEnd = lineBuffer.indexOf('\n')) !== -1) {
+          const line = lineBuffer.slice(0, lineEnd).trim()
+          lineBuffer = lineBuffer.slice(lineEnd + 1)
+
+          if (line === 'data: [DONE]') return
+          if (!line.startsWith('data: ')) continue
+
+          let delta: any
+          let finishReason: string | null | undefined
+          try {
+            const json = JSON.parse(line.slice(6))
+            delta = json.choices?.[0]?.delta
+            finishReason = json.choices?.[0]?.finish_reason
+          } catch {
+            continue // Skip malformed JSON lines
+          }
+
+          const nativeThinking: string = delta?.reasoning_content ?? delta?.thinking ?? ''
+          const rawContent: string = delta?.content ?? ''
+
+          // Parse <think> tags out of the content stream
+          tagBuffer += rawContent
+          let parsedContent = ''
+          let parsedThinking = ''
+
+          while (tagBuffer.length > 0) {
+            if (inThink) {
+              const closeIdx = tagBuffer.indexOf('</think>')
+              if (closeIdx !== -1) {
+                parsedThinking += tagBuffer.slice(0, closeIdx)
+                tagBuffer = tagBuffer.slice(closeIdx + 8)
+                inThink = false
+              } else {
+                const hold = partialTagSuffix('</think>', tagBuffer)
+                parsedThinking += tagBuffer.slice(0, tagBuffer.length - hold)
+                tagBuffer = tagBuffer.slice(tagBuffer.length - hold)
+                break
+              }
+            } else {
+              const openIdx = tagBuffer.indexOf('<think>')
+              if (openIdx !== -1) {
+                parsedContent += tagBuffer.slice(0, openIdx)
+                tagBuffer = tagBuffer.slice(openIdx + 7)
+                inThink = true
+              } else {
+                const hold = partialTagSuffix('<think>', tagBuffer)
+                parsedContent += tagBuffer.slice(0, tagBuffer.length - hold)
+                tagBuffer = tagBuffer.slice(tagBuffer.length - hold)
+                break
+              }
+            }
+          }
+
+          const isDone = finishReason !== null && finishReason !== undefined
+          if (parsedContent || nativeThinking || parsedThinking || isDone) {
+            yield {
+              message: {
+                role: delta?.role || 'assistant',
+                content: parsedContent,
+                thinking: nativeThinking + parsedThinking || undefined,
+              },
+              done: isDone,
+            }
+          }
+        }
+      }
+    }
+
+    return normalize()
   }
 
   async embed(model: string, input: string[]): Promise<EmbeddingResult> {

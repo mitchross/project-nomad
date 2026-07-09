@@ -3,6 +3,7 @@ import type { HttpContext } from '@adonisjs/core/http'
 import { ChatService } from '#services/chat_service'
 import { createSessionSchema, updateSessionSchema, addMessageSchema } from '#validators/chat'
 import KVStore from '#models/kv_store'
+import env from '#start/env'
 import { SystemService } from '#services/system_service'
 import { DockerService } from '#services/docker_service'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
@@ -19,11 +20,11 @@ export default class ChatsController {
     //    llama.cpp) or a remote/K8s Ollama. This is the only signal in K8s mode.
     //  - Docker mode → additionally, a UI-configured remote Ollama URL, or the
     //    local Ollama container marked installed.
-    const hasConfiguredHost = !!process.env.LLM_HOST || !!process.env.OLLAMA_HOST
+    const hasConfiguredHost = !!env.get('LLM_HOST') || !!env.get('OLLAMA_HOST')
     const aiAssistantInstalled =
       hasConfiguredHost ||
       (!DockerService.isKubernetesMode() &&
-        (((await KVStore.getValue('ai.remoteOllamaUrl')) ?? null) !== null ||
+        (!!(await KVStore.getValue('ai.remoteOllamaUrl')) ||
           (await this.systemService.checkServiceInstalled(SERVICE_NAMES.OLLAMA))))
     if (!aiAssistantInstalled) {
       return response.status(404).json({ error: 'AI Assistant service not installed' })

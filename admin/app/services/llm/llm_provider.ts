@@ -26,6 +26,8 @@ export interface ChatResponse {
   message: {
     role: string
     content: string
+    /** Reasoning-model output (native `thinking` field or parsed <think> tags) */
+    thinking?: string
   }
   done: boolean
 }
@@ -34,6 +36,8 @@ export interface ChatStreamChunk {
   message?: {
     role?: string
     content?: string
+    /** Reasoning-model output (native `thinking` field or parsed <think> tags) */
+    thinking?: string
   }
   done?: boolean
 }
@@ -88,7 +92,7 @@ export interface LLMProvider {
     progressCallback?: (percent: number, bytes?: { downloadedBytes?: number; totalBytes?: number }) => void,
     abortSignal?: AbortSignal,
     jobId?: string
-  ): Promise<{ success: boolean; message: string }>
+  ): Promise<{ success: boolean; message: string; retryable?: boolean }>
 
   /** Delete a model (Ollama only) */
   deleteModel?(model: string): Promise<void>

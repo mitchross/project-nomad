@@ -79,6 +79,7 @@ export class OllamaProvider implements LLMProvider {
       message: {
         role: result.message.role,
         content: result.message.content,
+        thinking: result.message.thinking ?? undefined,
       },
       done: true,
     }
@@ -94,13 +95,16 @@ export class OllamaProvider implements LLMProvider {
       options: request.options,
     })
 
-    // Map Ollama SDK ChatResponse chunks to our ChatStreamChunk interface
+    // Map Ollama SDK ChatResponse chunks to our ChatStreamChunk interface.
+    // Ollama surfaces reasoning natively on message.thinking — pass it through
+    // so the chat UI's Reasoning panel works for thinking models.
     async function* mapChunks(): AsyncIterable<ChatStreamChunk> {
       for await (const chunk of stream) {
         yield {
           message: {
             role: chunk.message?.role,
             content: chunk.message?.content,
+            thinking: chunk.message?.thinking ?? undefined,
           },
           done: chunk.done,
         }
@@ -112,9 +116,15 @@ export class OllamaProvider implements LLMProvider {
 
   async embed(model: string, input: string[]): Promise<EmbeddingResult> {
     const client = await this._ensureClient()
+    // num_ctx: some installs ship nomic-embed-text with a 2048-token modelfile
+    // default; 8192 matches its RoPE-extrapolated max so dense chunks embed
+    // whole instead of being silently truncated server-side. truncate: server-
+    // side net for anything that still overshoots (#881).
     const result = await client.embed({
       model,
       input,
+      truncate: true,
+      options: { num_ctx: 8192 },
     })
     return {
       embeddings: result.embeddings,
@@ -148,7 +158,7 @@ export class OllamaProvider implements LLMProvider {
     progressCallback?: (percent: number, bytes?: { downloadedBytes?: number; totalBytes?: number }) => void,
     abortSignal?: AbortSignal,
     _jobId?: string
-  ): Promise<{ success: boolean; message: string }> {
+  ): Promise<{ success: boolean; message: string; retryable?: boolean }> {
     try {
       const client = await this._ensureClient()
 
@@ -163,7 +173,8 @@ export class OllamaProvider implements LLMProvider {
       for await (const chunk of downloadStream) {
         if (abortSignal?.aborted) {
           logger.info(`[OllamaProvider] Download of "${model}" aborted by signal.`)
-          return { success: false, message: 'Download cancelled.' }
+          // retryable: false — a user-initiated cancel must not be retried by BullMQ
+          return { success: false, message: 'Download cancelled', retryable: false }
         }
         if (chunk.completed && chunk.total) {
           const percent = parseFloat(((chunk.completed / chunk.total) * 100).toFixed(2))
@@ -176,8 +187,16 @@ export class OllamaProvider implements LLMProvider {
       logger.info(`[OllamaProvider] Model "${model}" downloaded successfully.`)
       return { success: true, message: 'Model downloaded successfully.' }
     } catch (error) {
-      logger.error(`[OllamaProvider] Failed to download model "${model}": ${error instanceof Error ? error.message : error}`)
-      return { success: false, message: 'Failed to download model.' }
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      logger.error(`[OllamaProvider] Failed to download model "${model}": ${errorMessage}`)
+
+      // A model that needs a newer Ollama (412) can never succeed by retrying —
+      // classify it non-retryable and give the user the actionable next step.
+      const isVersionMismatch = errorMessage.includes('newer version of Ollama')
+      const userMessage = isVersionMismatch
+        ? 'This model requires a newer version of Ollama. Please update AI Assistant from the Apps page.'
+        : `Failed to download model: ${errorMessage}`
+      return { success: false, message: userMessage, retryable: !isVersionMismatch }
     }
   }
 

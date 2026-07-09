@@ -13,6 +13,8 @@ import env from '#start/env'
 import { NOMAD_API_DEFAULT_BASE_URL } from '../../constants/misc.js'
 import { createLLMProvider } from './llm/provider_factory.js'
 import type { LLMProvider, ChatRequest as LLMChatRequest } from './llm/llm_provider.js'
+import { SERVICE_NAMES } from '../../constants/service_names.js'
+import type { DockerService } from './docker_service.js'
 
 const NOMAD_MODELS_API_PATH = '/api/v1/ollama/models'
 const MODELS_CACHE_FILE = path.join(process.cwd(), 'storage', 'ollama-models-cache.json')
@@ -41,6 +43,25 @@ export class OllamaService {
   }
 
   /**
+   * Whether ANY embedding backend is configured for this deployment. The single
+   * source of truth for "should content be queued for KB embedding?" — used by
+   * every dispatch site so the answer can't drift between them.
+   *
+   * True when any of these deployment shapes is present:
+   *  - a dedicated embedding service (EMBEDDING_HOST)
+   *  - an env-configured LLM backend: OpenAI-compatible (vLLM/llama.cpp) or a
+   *    remote/K8s Ollama (LLM_HOST / OLLAMA_HOST)
+   *  - Docker mode: a UI-configured remote Ollama URL or a local Ollama
+   *    container (both resolved by getServiceURL)
+   */
+  public static async isEmbeddingBackendConfigured(dockerService: DockerService): Promise<boolean> {
+    if (env.get('EMBEDDING_HOST') || env.get('LLM_HOST') || env.get('OLLAMA_HOST')) {
+      return true
+    }
+    return !!(await dockerService.getServiceURL(SERVICE_NAMES.OLLAMA))
+  }
+
+  /**
    * Downloads a model with progress tracking. Only works with providers that
    * support model management (Ollama). For OpenAI-compatible providers, returns
    * a message indicating that model management is not supported.
@@ -61,7 +82,9 @@ export class OllamaService {
     }
 
     const result = await this.provider.pullModel(model, wrappedCallback, abortSignal, jobId)
-    if (!result.success) {
+    // Don't broadcast an error for user-initiated cancels — the cancel handler
+    // in DownloadService already broadcasts a cancelled state.
+    if (!result.success && result.message !== 'Download cancelled') {
       this.broadcastDownloadError(model, result.message)
     }
     return result
@@ -161,7 +184,10 @@ export class OllamaService {
     const haystack = parts.join(' ').toLowerCase()
     return (
       (haystack.includes('context length') && haystack.includes('exceed')) ||
-      haystack.includes('input length exceeds')
+      haystack.includes('input length exceeds') ||
+      // vLLM phrasing: "This model's maximum context length is N tokens.
+      // However, you requested M tokens..." — no "exceed" anywhere.
+      haystack.includes('maximum context length')
     )
   }
 
@@ -215,8 +241,17 @@ export class OllamaService {
    * job simply doesn't pace.
    */
   public async isEmbeddingGpuAccelerated(): Promise<boolean> {
-    if (this.provider.isEmbeddingGpuAccelerated) {
-      return this.provider.isEmbeddingGpuAccelerated()
+    // Best-effort: a provider misconfig (e.g. LLM_PROVIDER=openai without
+    // LLM_HOST makes the factory throw) must not fail the caller — pacing
+    // simply defaults to the conservative CPU assumption.
+    try {
+      if (this.provider.isEmbeddingGpuAccelerated) {
+        return await this.provider.isEmbeddingGpuAccelerated()
+      }
+    } catch (err) {
+      logger.warn(
+        `[OllamaService] isEmbeddingGpuAccelerated unavailable: ${err instanceof Error ? err.message : err}`
+      )
     }
     return false
   }
@@ -229,8 +264,16 @@ export class OllamaService {
    * a no-op returning [].
    */
   public async unloadAllChatModelsExcept(targetModel: string | null): Promise<string[]> {
-    if (this.provider.unloadAllChatModelsExcept) {
-      return this.provider.unloadAllChatModelsExcept(targetModel)
+    // Best-effort: unload housekeeping must never fail chat or page-load, even
+    // on a provider misconfig (factory throw).
+    try {
+      if (this.provider.unloadAllChatModelsExcept) {
+        return await this.provider.unloadAllChatModelsExcept(targetModel)
+      }
+    } catch (err) {
+      logger.warn(
+        `[OllamaService] unloadAllChatModelsExcept unavailable: ${err instanceof Error ? err.message : err}`
+      )
     }
     return []
   }
