@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kiwix
+  labels:
+    app: kiwix
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kiwix
+  template:
+    metadata:
+      labels:
+        app: kiwix
+    spec:
+      automountServiceAccountToken: false
+      # Kiwix serves the ZIM files the admin downloads into the SHARED
+      # nomad-storage volume (subPath zim). With the default ReadWriteOnce
+      # storage class both pods must land on the same node — this affinity
+      # guarantees that. Remove it if nomad-storage uses a ReadWriteMany class.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: nomad-admin
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: kiwix
+          image: ghcr.io/kiwix/kiwix-serve:3.8.1
+          # Library mode: the admin maintains kiwix-library.xml in storage/zim;
+          # --monitorLibrary picks up added/removed ZIMs without restarts.
+          args:
+            - --library
+            - /data/kiwix-library.xml
+            - --monitorLibrary
+            - --address=all
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: storage
+              subPath: zim
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: nomad-storage

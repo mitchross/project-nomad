@@ -1,0 +1,28 @@
+# Project N.O.M.A.D. on Kubernetes — batteries-included entry point.
+#
+#   kubectl apply -k deploy/k8s
+#
+# The base is the minimum Command Center (admin + MySQL + Redis). Everything
+# else is an opt-in component: comment lines in or out to shape your NOMAD.
+# See deploy/k8s/README.md for the env contract and important caveats.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: project-nomad
+resources:
+  - base
+components:
+  # AI stack — Knowledge Base (RAG) needs qdrant; pick ONE llm flavor.
+  - components/qdrant
+  - components/ollama            # in-cluster Ollama (upstream-like experience)
+  # - components/ollama-gpu-nvidia # add GPU to the ollama pod (NVIDIA operator)
+  # - components/external-llm    # INSTEAD of ollama: BYO vLLM/llama.cpp/OpenAI-compatible
+
+  # Companion apps
+  - components/kiwix             # Information Library (Wikipedia & co, shares admin storage)
+  - components/kolibri           # Education Platform (note the dual-port caveat in README)
+  - components/cyberchef         # Data Tools
+  - components/flatnotes         # Notes
+
+  # Traffic — pick one and edit hosts first
+  # - components/ingress
+  # - components/httproute

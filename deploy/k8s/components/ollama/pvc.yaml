@@ -1,0 +1,11 @@
+# Model storage. A single 7-8B model is ~5Gi; size for the models you plan to pull.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi

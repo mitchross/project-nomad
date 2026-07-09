@@ -1,0 +1,63 @@
+# Plain Ingress for the Command Center. Replace hosts with your domain and set
+# your ingressClassName. Uncomment the extra rules if you enable the matching
+# components — their URLs must be browser-reachable (see README).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nomad
+  annotations: {}
+spec:
+  # ingressClassName: nginx
+  rules:
+    - host: nomad.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nomad-admin
+                port:
+                  name: http
+    # - host: cyberchef.example.com
+    #   http:
+    #     paths:
+    #       - path: /
+    #         pathType: Prefix
+    #         backend:
+    #           service:
+    #             name: cyberchef
+    #             port:
+    #               name: http
+    # - host: flatnotes.example.com
+    #   http:
+    #     paths:
+    #       - path: /
+    #         pathType: Prefix
+    #         backend:
+    #           service:
+    #             name: flatnotes
+    #             port:
+    #               name: http
+    # Kolibri needs BOTH ports exposed — the zip-content server (8311) is an
+    # alternate origin browsers hit directly. Simplest is a second host:
+    # - host: kolibri.example.com
+    #   http:
+    #     paths:
+    #       - path: /
+    #         pathType: Prefix
+    #         backend:
+    #           service:
+    #             name: kolibri
+    #             port:
+    #               name: http
+    # - host: kolibri-content.example.com
+    #   http:
+    #     paths:
+    #       - path: /
+    #         pathType: Prefix
+    #         backend:
+    #           service:
+    #             name: kolibri
+    #             port:
+    #               name: zipcontent

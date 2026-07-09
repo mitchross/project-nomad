@@ -1,0 +1,20 @@
+# Gateway API alternative to the ingress component. Requires Gateway API CRDs
+# and a Gateway; set parentRefs to yours and replace the hostname.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: nomad
+spec:
+  parentRefs:
+    - name: my-gateway
+      namespace: gateway-system
+  hostnames:
+    - nomad.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: nomad-admin
+          port: 8080

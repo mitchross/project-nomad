@@ -1,0 +1,16 @@
+# Main NOMAD data volume: ZIM files, uploaded documents, maps, notes, models
+# metadata, etc. live here. Size accordingly — a full Wikipedia ZIM alone is
+# ~100Gi. Leave storageClassName unset to use your cluster default, or set it
+# explicitly. If you enable the kiwix component on a multi-node cluster, either
+# use a ReadWriteMany-capable storage class here or keep the pod affinity in
+# the kiwix deployment (see components/kiwix/deployment.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nomad-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi

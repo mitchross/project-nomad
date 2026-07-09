@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flatnotes
+  labels:
+    app: flatnotes
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: flatnotes
+  template:
+    metadata:
+      labels:
+        app: flatnotes
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: flatnotes
+          image: dullage/flatnotes:v5.5.4
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Matches the NOMAD appliance default (single-user, LAN-trusted).
+            # Set to "password" + FLATNOTES_USERNAME/FLATNOTES_PASSWORD if your
+            # deployment is reachable beyond a trusted network.
+            - name: FLATNOTES_AUTH_TYPE
+              value: none
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: flatnotes-data

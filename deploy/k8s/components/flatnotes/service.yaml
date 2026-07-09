@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: flatnotes
+  labels:
+    app: flatnotes
+spec:
+  selector:
+    app: flatnotes
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
