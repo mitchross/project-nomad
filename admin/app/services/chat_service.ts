@@ -1,5 +1,6 @@
 import ChatSession from '#models/chat_session'
 import ChatMessage from '#models/chat_message'
+import KVStore from '#models/kv_store'
 import logger from '@adonisjs/core/services/logger'
 import { DateTime } from 'luxon'
 import { inject } from '@adonisjs/core'
@@ -36,18 +37,25 @@ export class ChatService {
         return [] // If no models are available, return empty suggestions
       }
 
-      // Pick the best model for suggestions: prefer largest (Ollama reports real sizes),
-      // but fall back to the first model if all sizes are 0 (OpenAI-compatible providers)
-      const largestModel = models.reduce((prev, current) => {
-        return current.size > prev.size ? current : prev
-      })
+      // Prefer the user's selected chat model. Fall back to the smallest
+      // installed model — picking the largest by file size is unsafe: if any
+      // installed model exceeds available VRAM (e.g. llama3.1:405b on a 96 GB
+      // GPU), Ollama spends minutes trying to load it and the request 500s.
+      // Suggestions are short prompts that don't benefit from a flagship model.
+      // Note: OpenAI-compatible providers report size 0 for every model, so the
+      // smallest-reduce simply returns the first listed model in that case.
+      const lastModel = await KVStore.getValue('chat.lastModel')
+      const preferred = lastModel ? models.find((m) => m.name === lastModel) : undefined
+      const chosen =
+        preferred ??
+        models.reduce((prev, current) => (prev.size < current.size ? prev : current))
 
-      if (!largestModel) {
+      if (!chosen) {
         return []
       }
 
       const response = await this.ollamaService.chat({
-        model: largestModel.name,
+        model: chosen.name,
         messages: [
           {
             role: 'user',
