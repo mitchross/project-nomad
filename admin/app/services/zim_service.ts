@@ -11,6 +11,7 @@ import { findReplacedWikipediaFiles } from '../utils/zim_filename.js'
 import { decideSupersededDeletion } from '../utils/superseded_resource.js'
 import logger from '@adonisjs/core/services/logger'
 import { DockerService } from './docker_service.js'
+import env from '#start/env'
 import { inject } from '@adonisjs/core'
 import {
   deleteFileIfExists,
@@ -545,8 +546,16 @@ export class ZimService {
       logger.error(`[ZimService] Failed to update WikipediaSelection for ${filename}:`, error)
     }
 
-    const ollamaUrl = await this.dockerService.getServiceURL('nomad_ollama')
-    if (ollamaUrl) {
+    // Queue KB embedding when an embedding backend is configured for this
+    // deployment — Ollama (local/remote/K8s), an OpenAI-compatible provider
+    // (vLLM/llama.cpp via LLM_HOST), or a dedicated EMBEDDING_HOST. The
+    // EmbedFileJob does its own readiness gating and permanently skips if the
+    // backend truly isn't there.
+    const embeddingConfigured =
+      !!env.get('EMBEDDING_HOST') ||
+      env.get('LLM_PROVIDER') === 'openai' ||
+      !!(await this.dockerService.getServiceURL('nomad_ollama'))
+    if (embeddingConfigured) {
       try {
         const { EmbedFileJob } = await import('#jobs/embed_file_job')
         await EmbedFileJob.dispatch({

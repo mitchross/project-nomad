@@ -25,7 +25,6 @@ import type { FileWarning, FileWarningsResult, StoredFileInfo } from '../../type
 import type { KbIngestStateValue } from '../../types/kb_ingest_state.js'
 import { ZIMExtractionService } from './zim_extraction_service.js'
 import { ZIM_BATCH_SIZE } from '../../constants/zim_extraction.js'
-import { EMBEDDING_MODEL_NAME } from '../../constants/ollama.js'
 import { ProcessAndEmbedFileResponse, ProcessZIMFileResponse, RAGResult, RerankedRAGResult } from '../../types/rag.js'
 import env from '#start/env'
 
@@ -288,6 +287,68 @@ export class RagService {
     return [...new Set(keywords)]
   }
 
+  /**
+   * Resolve which embedding model to use for this deployment, honoring the
+   * EMBEDDING_MODEL env var. Deployment-agnostic by design:
+   *
+   * - EMBEDDING_HOST set: a dedicated embedding service serves EMBEDDING_MODEL;
+   *   we neither verify nor pull it through the main LLM provider.
+   * - Provider without model management (OpenAI-compatible, e.g. vLLM/llama.cpp):
+   *   we can't list or pull models, so we trust EMBEDDING_MODEL as configured.
+   * - Provider with model management (Ollama, local or remote): verify the model
+   *   is installed, optionally auto-pull it (preserving the zero-config nomic UX),
+   *   and fall back to any installed nomic-embed-text tag.
+   *
+   * Returns the resolved model name, or null if it genuinely can't be made
+   * available (Ollama reachable but the model is missing and a pull was not done
+   * or failed). Caches the result in resolvedEmbeddingModel once verified.
+   */
+  private async _resolveEmbeddingModel(autoDownload: boolean): Promise<string | null> {
+    if (this.embeddingModelVerified && this.resolvedEmbeddingModel) {
+      return this.resolvedEmbeddingModel
+    }
+
+    const configured = RagService.EMBEDDING_MODEL
+
+    // Dedicated embedding host, or a provider that can't manage models (vLLM /
+    // OpenAI-compatible): nothing to verify or pull — trust the configured name.
+    if (env.get('EMBEDDING_HOST') || !this.ollamaService.provider.supportsModelManagement()) {
+      this.resolvedEmbeddingModel = configured
+      this.embeddingModelVerified = true
+      return this.resolvedEmbeddingModel
+    }
+
+    // Ollama (local or remote): verify presence, optionally auto-pull, and fall
+    // back to any installed nomic-embed-text tag.
+    const allModels = await this.ollamaService.getModels(true)
+    const embeddingModel =
+      allModels.find((model) => model.name === configured) ??
+      allModels.find((model) => model.name.toLowerCase().includes('nomic-embed-text'))
+
+    if (!embeddingModel) {
+      if (!autoDownload) {
+        logger.warn(`[RAG] Embedding model ${configured} not found. Cannot perform similarity search.`)
+        return null
+      }
+      try {
+        const downloadResult = await this.ollamaService.downloadModel(configured)
+        if (!downloadResult.success) {
+          throw new Error(downloadResult.message || 'Unknown error during model download')
+        }
+      } catch (modelError) {
+        logger.error(
+          `[RAG] Embedding model ${configured} not found locally and failed to download:`,
+          modelError
+        )
+        return null
+      }
+    }
+
+    this.resolvedEmbeddingModel = embeddingModel?.name ?? configured
+    this.embeddingModelVerified = true
+    return this.resolvedEmbeddingModel
+  }
+
   public async embedAndStoreText(
     text: string,
     metadata: Record<string, any> = {},
@@ -299,29 +360,9 @@ export class RagService {
         RagService.EMBEDDING_DIMENSION
       )
 
-      if (!this.embeddingModelVerified) {
-        const allModels = await this.ollamaService.getModels(true)
-        const embeddingModel =
-          allModels.find((model) => model.name === EMBEDDING_MODEL_NAME) ??
-          allModels.find((model) => model.name.toLowerCase().includes('nomic-embed-text'))
-
-        if (!embeddingModel) {
-          try {
-            const downloadResult = await this.ollamaService.downloadModel(EMBEDDING_MODEL_NAME)
-            if (!downloadResult.success) {
-              throw new Error(downloadResult.message || 'Unknown error during model download')
-            }
-          } catch (modelError) {
-            logger.error(
-              `[RAG] Embedding model ${EMBEDDING_MODEL_NAME} not found locally and failed to download:`,
-              modelError
-            )
-            this.embeddingModelVerified = false
-            return null
-          }
-        }
-        this.resolvedEmbeddingModel = embeddingModel?.name ?? EMBEDDING_MODEL_NAME
-        this.embeddingModelVerified = true
+      const resolvedModel = await this._resolveEmbeddingModel(true)
+      if (!resolvedModel) {
+        return null
       }
 
       // TokenChunker uses character-based tokenization (1 char = 1 token)
@@ -377,7 +418,7 @@ export class RagService {
 
         logger.debug(`[RAG] Embedding batch ${batchIdx + 1}/${totalBatches} (${batch.length} chunks)`)
 
-        const response = await this.ollamaService.embed(this.resolvedEmbeddingModel ?? EMBEDDING_MODEL_NAME, batch)
+        const response = await this.ollamaService.embed(resolvedModel, batch)
 
         embeddings.push(...response.embeddings)
 
@@ -831,21 +872,9 @@ export class RagService {
         return []
       }
 
-      if (!this.embeddingModelVerified) {
-        const allModels = await this.ollamaService.getModels(true)
-        const embeddingModel =
-          allModels.find((model) => model.name === EMBEDDING_MODEL_NAME) ??
-          allModels.find((model) => model.name.toLowerCase().includes('nomic-embed-text'))
-
-        if (!embeddingModel) {
-          logger.warn(
-            `[RAG] ${EMBEDDING_MODEL_NAME} not found. Cannot perform similarity search.`
-          )
-          this.embeddingModelVerified = false
-          return []
-        }
-        this.resolvedEmbeddingModel = embeddingModel.name
-        this.embeddingModelVerified = true
+      const resolvedModel = await this._resolveEmbeddingModel(false)
+      if (!resolvedModel) {
+        return []
       }
 
       // Preprocess query for better matching
@@ -871,7 +900,7 @@ export class RagService {
         return []
       }
 
-      const response = await this.ollamaService.embed(this.resolvedEmbeddingModel ?? EMBEDDING_MODEL_NAME, [prefixedQuery])
+      const response = await this.ollamaService.embed(resolvedModel, [prefixedQuery])
 
       // Perform semantic search with a higher limit to enable reranking
       const searchLimit = limit * 3 // Get more results for reranking

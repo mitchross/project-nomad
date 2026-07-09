@@ -6,6 +6,7 @@ import { DockerService } from '#services/docker_service'
 import { OllamaService } from '#services/ollama_service'
 import KbIngestState from '#models/kb_ingest_state'
 import { createHash } from 'crypto'
+import env from '#start/env'
 import logger from '@adonisjs/core/services/logger'
 import fs from 'node:fs/promises'
 import { ZIM_BATCH_SIZE } from '../../constants/zim_extraction.js'
@@ -67,22 +68,32 @@ export class EmbedFileJob {
     const ragService = new RagService(dockerService, ollamaService)
 
     try {
-      // Check if Ollama and Qdrant services are installed and ready
+      // Ensure the embedding backend and vector store are configured/reachable.
+      // Deployment-agnostic:
+      //  - An OpenAI-compatible provider (vLLM, llama.cpp) is configured via
+      //    LLM_HOST and has NO container to discover, so the "not installed"
+      //    permanent-skip only applies to Ollama-style providers that support
+      //    model management. For those, an unresolvable service URL genuinely
+      //    means AI Assistant isn't installed.
+      //  - Qdrant is resolved the same way RagService does: QDRANT_HOST env
+      //    first (K8s / bring-your-own), then Docker container discovery.
       // Use UnrecoverableError for "not installed" so BullMQ won't retry —
-      // retrying 30x when the service doesn't exist just wastes Redis connections
-      const ollamaUrl = await dockerService.getServiceURL('nomad_ollama')
-      if (!ollamaUrl) {
-        logger.warn('[EmbedFileJob] Ollama is not installed. Skipping embedding for: %s', fileName)
-        throw new UnrecoverableError('Ollama service is not installed. Install AI Assistant to enable file embeddings.')
+      // retrying 30x when the backend doesn't exist just wastes Redis connections.
+      if (ollamaService.provider.supportsModelManagement()) {
+        const ollamaUrl = await dockerService.getServiceURL('nomad_ollama')
+        if (!ollamaUrl) {
+          logger.warn('[EmbedFileJob] Ollama is not installed. Skipping embedding for: %s', fileName)
+          throw new UnrecoverableError('Ollama service is not installed. Install AI Assistant to enable file embeddings.')
+        }
       }
 
       const existingModels = await ollamaService.getModels()
       if (!existingModels) {
-        logger.warn('[EmbedFileJob] Ollama service not ready yet. Will retry...')
-        throw new Error('Ollama service not ready yet')
+        logger.warn('[EmbedFileJob] AI service not ready yet. Will retry...')
+        throw new Error('AI service not ready yet')
       }
 
-      const qdrantUrl = await dockerService.getServiceURL('nomad_qdrant')
+      const qdrantUrl = env.get('QDRANT_HOST') || (await dockerService.getServiceURL('nomad_qdrant'))
       if (!qdrantUrl) {
         logger.warn('[EmbedFileJob] Qdrant is not installed. Skipping embedding for: %s', fileName)
         throw new UnrecoverableError('Qdrant service is not installed. Install AI Assistant to enable file embeddings.')
