@@ -1,7 +1,7 @@
 import { Job, UnrecoverableError } from 'bullmq'
 import { RunDownloadJobParams, DownloadProgressData } from '../../types/downloads.js'
 import { QueueService } from '#services/queue_service'
-import { doResumableDownload } from '../utils/downloads.js'
+import { doResumableDownload, GatedContentAuthError } from '../utils/downloads.js'
 import { createHash } from 'crypto'
 import { DockerService } from '#services/docker_service'
 import { ZimService } from '#services/zim_service'
@@ -67,7 +67,7 @@ export class RunDownloadJob {
   }
 
   async handle(job: Job) {
-    const { url, filepath, timeout, allowedMimeTypes, forceNew, filetype, resourceMetadata } =
+    const { url, filepath, timeout, allowedMimeTypes, forceNew, filetype, resourceMetadata, requestHeaders } =
       job.data as RunDownloadJobParams
 
     // Register abort controller for this job
@@ -110,6 +110,7 @@ export class RunDownloadJob {
         timeout,
         allowedMimeTypes,
         forceNew,
+        requestHeaders,
         signal: abortController.signal,
         onProgress(progress) {
           const progressPercent = (progress.downloadedBytes / (progress.totalBytes || 1)) * 100
@@ -211,7 +212,12 @@ export class RunDownloadJob {
               // Only touch the knowledge base if an embedding backend is
               // configured for this deployment (see
               // OllamaService.isEmbeddingBackendConfigured for the shapes).
-              if (await OllamaService.isEmbeddingBackendConfigured(dockerService)) {
+              // skip_embedding opts a ZIM out entirely — Creator Pack video ZIMs are
+              // media galleries, not text, so they must never be embedded or KB-reconciled.
+              if (
+                (await OllamaService.isEmbeddingBackendConfigured(dockerService)) &&
+                !resourceMetadata?.skip_embedding
+              ) {
                 // A content UPDATE replaces a prior file at a DIFFERENT path
                 // (version is in the filename). A fresh install has no prior row;
                 // a same-version re-download keeps the same path. The two cases
@@ -313,6 +319,13 @@ export class RunDownloadJob {
       // Check both the flag (Redis poll) and abort reason (in-process cancel).
       if (userCancelled || abortController.signal.reason === 'user-cancel') {
         throw new UnrecoverableError(`Download cancelled: ${error.message}`)
+      }
+      // A rejected entitlement is permanent - this build either has the key or it
+      // doesn't. Left as a plain Error it consumes all 10 attempts with exponential
+      // backoff from 30s, so the job reads `delayed` for ~4h15m and the user sees a
+      // stuck download instead of the message above.
+      if (error instanceof GatedContentAuthError) {
+        throw new UnrecoverableError(error.message)
       }
       throw error
     } finally {

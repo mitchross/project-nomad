@@ -95,6 +95,22 @@ export class OllamaProvider implements LLMProvider {
       options: request.options,
     })
 
+    // Abort the in-flight generation when the client disconnects (#1065) — the
+    // SDK's streamed response is an AbortableAsyncIterator with a per-request
+    // abort(), so an abandoned chat doesn't keep decoding server-side and block
+    // Ollama's single parallel slot.
+    if (request.signal) {
+      const abort = () => {
+        try {
+          ;(stream as any).abort?.()
+        } catch {
+          // already finished
+        }
+      }
+      if (request.signal.aborted) abort()
+      else request.signal.addEventListener('abort', abort, { once: true })
+    }
+
     // Map Ollama SDK ChatResponse chunks to our ChatStreamChunk interface.
     // Ollama surfaces reasoning natively on message.thinking — pass it through
     // so the chat UI's Reasoning panel works for thinking models.
@@ -205,11 +221,22 @@ export class OllamaProvider implements LLMProvider {
     await client.delete({ model })
   }
 
+  // Memoized `thinking` capability per model name. A model's capabilities don't
+  // change at runtime, so cache the show() result — without this, loading the
+  // chat picker fires one lookup per installed model and every chat send fires
+  // another (upstream v1.34). Only successful lookups are cached; transient
+  // failures stay uncached so they can be retried.
+  private thinkingCapabilityCache: Map<string, boolean> = new Map()
+
   async checkModelHasThinking(modelName: string): Promise<boolean> {
+    const cached = this.thinkingCapabilityCache.get(modelName)
+    if (cached !== undefined) return cached
     try {
       const client = await this._ensureClient()
       const modelInfo = await client.show({ model: modelName })
-      return modelInfo.capabilities.includes('thinking')
+      const hasThinking = modelInfo.capabilities.includes('thinking')
+      this.thinkingCapabilityCache.set(modelName, hasThinking)
+      return hasThinking
     } catch {
       return false
     }

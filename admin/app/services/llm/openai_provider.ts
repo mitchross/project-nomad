@@ -38,15 +38,28 @@ export class OpenAIProvider implements LLMProvider {
     }
   }
 
+  // OpenAI-compatible endpoints ignore Ollama's `think`; `reasoning_effort` is the
+  // actual lever. Only touch it for thinking-capable models so backends never get an
+  // unexpected param. gpt-oss requires an explicit level; a capable-but-disabled model
+  // gets 'none' to suppress thinking (capable models default thinking ON otherwise,
+  // so think===true is a no-op). (upstream v1.34)
+  private reasoningEffort(request: ChatRequest): string | undefined {
+    if (request.think === 'medium') return 'medium'
+    if (request.thinkingCapable && request.think === false) return 'none'
+    return undefined
+  }
+
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const response = await fetch(`${this.baseURL}/chat/completions`, {
       method: 'POST',
       headers: this.headers(),
+      signal: request.signal,
       body: JSON.stringify({
         model: request.model,
         messages: request.messages,
         temperature: request.options?.temperature,
         max_tokens: request.options?.num_predict,
+        reasoning_effort: this.reasoningEffort(request),
         stream: false,
       }),
     })
@@ -67,7 +80,7 @@ export class OpenAIProvider implements LLMProvider {
     // never leaks into the visible reply — or into chat titles/suggestions,
     // which are generated through this non-streaming path.
     const message = data.choices[0].message
-    const nativeThinking: string = message.reasoning_content ?? message.thinking ?? ''
+    const nativeThinking: string = message.reasoning_content ?? message.thinking ?? message.reasoning ?? ''
     let content: string = message.content ?? ''
     let parsedThinking = ''
     content = content.replace(/<think>([\s\S]*?)<\/think>/g, (_m, inner) => {
@@ -90,11 +103,13 @@ export class OpenAIProvider implements LLMProvider {
     const response = await fetch(`${this.baseURL}/chat/completions`, {
       method: 'POST',
       headers: this.headers(),
+      signal: request.signal,
       body: JSON.stringify({
         model: request.model,
         messages: request.messages,
         temperature: request.options?.temperature,
         max_tokens: request.options?.num_predict,
+        reasoning_effort: this.reasoningEffort(request),
         stream: true,
       }),
     })
@@ -152,7 +167,8 @@ export class OpenAIProvider implements LLMProvider {
             continue // Skip malformed JSON lines
           }
 
-          const nativeThinking: string = delta?.reasoning_content ?? delta?.thinking ?? ''
+          // vLLM: reasoning_content; some servers: thinking; Ollama's /v1: reasoning (#1065)
+          const nativeThinking: string = delta?.reasoning_content ?? delta?.thinking ?? delta?.reasoning ?? ''
           const rawContent: string = delta?.content ?? ''
 
           // Parse <think> tags out of the content stream
