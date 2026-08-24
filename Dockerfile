@@ -28,6 +28,14 @@ FROM base AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules /app/node_modules
 ADD admin/ ./
+# Regenerate the curated drug-reference data modules
+# (app/data/{conditions,natural_remedies,home_remedies}.ts) from their single
+# source of truth — the repo-root collections/*.json — so the JSON is what gets
+# compiled into the image and the committed .ts can never silently drift from it
+# in a build. The gen script resolves ../../collections relative to admin/scripts,
+# which is /collections once admin/ has been copied to /app.
+COPY collections/ /collections/
+RUN npm run gen:curated-data
 RUN node ace build
 
 # Production stage
@@ -62,8 +70,8 @@ RUN set -eux; \
     /usr/local/bin/pmtiles version
 
 # Labels
-LABEL org.opencontainers.image.title="Project N.O.M.A.D" \
-      org.opencontainers.image.description="The Project N.O.M.A.D Official Docker image" \
+LABEL org.opencontainers.image.title="Project NOMAD" \
+      org.opencontainers.image.description="The Project NOMAD Official Docker image" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
@@ -73,6 +81,17 @@ LABEL org.opencontainers.image.title="Project N.O.M.A.D" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ENV NODE_ENV=production
+
+# Creator Packs entitlement key, injected into OFFICIAL release builds at build
+# time (--build-arg CREATOR_PACKS_APP_KEY=... from the CREATOR_PACKS_APP_KEY CI
+# secret; see build-primary-image.yml). Baked as an ENV so admin/start/env.ts
+# reads it at runtime. Empty by default, so builds from source (and any build
+# without the secret) ship UNCONFIGURED and hide the Creator Packs UI. The key
+# lands in this public image layer (extractable — the accepted ceiling); rotate
+# via `wrangler secret put APP_KEY` + a new image if it leaks.
+ARG CREATOR_PACKS_APP_KEY=""
+ENV CREATOR_PACKS_APP_KEY=$CREATOR_PACKS_APP_KEY
+
 WORKDIR /app
 COPY --from=production-deps /app/node_modules /app/node_modules
 COPY --from=build /app/build /app

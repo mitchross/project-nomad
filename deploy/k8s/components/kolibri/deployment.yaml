@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kolibri
+  labels:
+    app: kolibri
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kolibri
+  template:
+    metadata:
+      labels:
+        app: kolibri
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: kolibri
+          image: learningequality/kolibri:0.19.4
+          ports:
+            - name: http
+              containerPort: 8080
+            # Alternate-origin zip-content server for interactive exercises /
+            # HTML5 apps. Browsers connect to this port DIRECTLY, so it must be
+            # exposed alongside the web UI (see README).
+            - name: zipcontent
+              containerPort: 8311
+          env:
+            - name: KOLIBRI_ZIP_CONTENT_PORT
+              value: "8311"
+          volumeMounts:
+            - name: data
+              mountPath: /kolibri
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kolibri-data

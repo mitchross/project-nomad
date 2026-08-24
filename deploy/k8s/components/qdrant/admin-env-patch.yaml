@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nomad-admin
+spec:
+  template:
+    spec:
+      containers:
+        - name: admin
+          env:
+            - name: QDRANT_HOST
+              value: http://qdrant:6333

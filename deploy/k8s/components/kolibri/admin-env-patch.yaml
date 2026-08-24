@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nomad-admin
+spec:
+  template:
+    spec:
+      containers:
+        - name: admin
+          env:
+            # BROWSER-FACING URL — this becomes the "Open" link in the NOMAD UI,
+            # so it must be reachable from your users' browsers (via your
+            # ingress/gateway), not a cluster-internal address. Edit it.
+            - name: KOLIBRI_URL
+              value: https://kolibri.example.com

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nomad-admin
+  labels:
+    app: nomad-admin
+spec:
+  replicas: 1
+  # Recreate: the storage PVC is ReadWriteOnce by default and the app is single-instance
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nomad-admin
+  template:
+    metadata:
+      labels:
+        app: nomad-admin
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: admin
+          # NOTE: upstream's image does not (yet) include Kubernetes support.
+          # This fork's image is required until the docker-free mode is upstreamed.
+          image: ghcr.io/mitchross/project-nomad:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: nomad-config
+            - secretRef:
+                name: nomad-secrets
+          volumeMounts:
+            - name: storage
+              mountPath: /app/storage
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: nomad-storage

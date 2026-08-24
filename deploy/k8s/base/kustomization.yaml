@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: project-nomad
+resources:
+  - namespace.yaml
+  - secret.yaml
+  - admin/deployment.yaml
+  - admin/service.yaml
+  - admin/pvc.yaml
+  - mysql/deployment.yaml
+  - mysql/service.yaml
+  - mysql/pvc.yaml
+  - redis/deployment.yaml
+  - redis/service.yaml
+  - redis/pvc.yaml
+configMapGenerator:
+  - name: nomad-config
+    envs:
+      - config.env

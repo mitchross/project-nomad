@@ -15,6 +15,13 @@ export interface ChatRequest {
   messages: ChatMessage[]
   stream?: boolean
   think?: boolean | string
+  // Whether the target model supports thinking. Lets OpenAI-compatible providers tell
+  // "capable but disabled" (send reasoning_effort:'none') apart from "not capable"
+  // (send nothing). (upstream v1.34)
+  thinkingCapable?: boolean
+  // Aborts the upstream request when the client disconnects, so an abandoned generation
+  // doesn't keep decoding server-side and block the backend's parallel slot (#1065).
+  signal?: AbortSignal
   options?: {
     temperature?: number
     num_ctx?: number

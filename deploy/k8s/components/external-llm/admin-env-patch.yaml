@@ -1,0 +1,35 @@
+# Point NOMAD at an OpenAI-compatible backend you already run (vLLM, llama.cpp,
+# LM Studio, ...). Edit the values for your environment. Use this INSTEAD of the
+# ollama component. Model install/delete from the NOMAD UI is unavailable in
+# this mode — manage models on your backend.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nomad-admin
+spec:
+  template:
+    spec:
+      containers:
+        - name: admin
+          env:
+            - name: LLM_PROVIDER
+              value: openai
+            # Include the /v1 suffix for OpenAI-compatible servers
+            - name: LLM_HOST
+              value: http://vllm.ai.svc.cluster.local:8000/v1
+            - name: LLM_API_KEY
+              value: unused
+            # The embedding model your backend serves, and its vector dimensions.
+            # Defaults assume nomic-embed-text:v1.5 (768). For a different model,
+            # set both — the Qdrant collection is created at this dimension.
+            - name: EMBEDDING_MODEL
+              value: nomic-embed-text:v1.5
+            - name: EMBEDDING_DIMENSIONS
+              value: "768"
+            # Optional: route embeddings to a DEDICATED OpenAI-compatible
+            # embedding service (HuggingFace TEI, a second vLLM, ...) when your
+            # chat backend doesn't serve /embeddings.
+            # - name: EMBEDDING_HOST
+            #   value: http://tei.ai.svc.cluster.local:80/v1
+            # - name: EMBEDDING_API_KEY
+            #   value: unused

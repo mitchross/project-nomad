@@ -1,0 +1,15 @@
+# Requires the NVIDIA GPU Operator (or device plugin) on the cluster.
+# If your setup needs an explicit runtime class, uncomment runtimeClassName.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+spec:
+  template:
+    spec:
+      # runtimeClassName: nvidia
+      containers:
+        - name: ollama
+          resources:
+            limits:
+              nvidia.com/gpu: 1

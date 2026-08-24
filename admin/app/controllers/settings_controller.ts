@@ -45,10 +45,14 @@ export default class SettingsController {
 
   async maps({ inertia }: HttpContext) {
     const baseAssetsCheck = await this.mapService.ensureBaseAssets()
-    const regionFiles = await this.mapService.listRegions()
+    const [regionFiles, worldBasemapExists] = await Promise.all([
+      this.mapService.listRegions(),
+      this.mapService.checkWorldBasemapExists(),
+    ])
     return inertia.render('settings/maps', {
       maps: {
         baseAssetsExist: baseAssetsCheck,
+        worldBasemapExists,
         regionFiles: regionFiles.files,
       },
     })
@@ -78,6 +82,7 @@ export default class SettingsController {
     const aiAssistantCustomName = await KVStore.getValue('ai.assistantCustomName')
     const remoteOllamaUrl = await KVStore.getValue('ai.remoteOllamaUrl')
     const ollamaFlashAttention = await KVStore.getValue('ai.ollamaFlashAttention')
+    const autoThinking = await KVStore.getValue('ai.autoThinking')
     return inertia.render('settings/models', {
       models: {
         availableModels: availableModels?.models || [],
@@ -87,6 +92,7 @@ export default class SettingsController {
           aiAssistantCustomName: aiAssistantCustomName ?? '',
           remoteOllamaUrl: remoteOllamaUrl ?? '',
           ollamaFlashAttention: ollamaFlashAttention ?? true,
+          autoThinking: autoThinking ?? false,
         },
       },
     })
@@ -109,6 +115,10 @@ export default class SettingsController {
 
   async zimRemote({ inertia }: HttpContext) {
     return inertia.render('settings/zim/remote-explorer')
+  }
+
+  async creatorPacks({ inertia }: HttpContext) {
+    return inertia.render('settings/creator-packs')
   }
 
   async benchmark({ inertia }: HttpContext) {
