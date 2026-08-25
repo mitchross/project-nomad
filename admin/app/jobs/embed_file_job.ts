@@ -8,6 +8,7 @@ import KbIngestState from '#models/kb_ingest_state'
 import { createHash } from 'crypto'
 import env from '#start/env'
 import logger from '@adonisjs/core/services/logger'
+import { EmbeddingIdentityMismatchError } from '#services/rag/embedding_fingerprint'
 import fs from 'node:fs/promises'
 import { ZIM_BATCH_SIZE } from '../../constants/zim_extraction.js'
 
@@ -312,6 +313,15 @@ export class EmbedFileJob {
       // the "endless queue loop" / "api/embed for weeks" (#881/#944/#959). Mark it unrecoverable so
       // BullMQ stops after one pass instead of storming.
       let normalizedError = error
+      // An embedding-identity mismatch is a configuration problem: the
+      // collection was built with different embedding settings. Retrying 30x
+      // cannot fix it, and the operator must choose between restoring the old
+      // settings and reindexing.
+      if (!(error instanceof UnrecoverableError) && error instanceof EmbeddingIdentityMismatchError) {
+        logger.error(`[EmbedFileJob] Embedding identity mismatch for ${fileName}; not retrying.`)
+        normalizedError = new UnrecoverableError(error.message)
+      }
+
       if (!(error instanceof UnrecoverableError) && OllamaService.isContextLengthError(error)) {
         logger.warn(
           `[EmbedFileJob] Context-length overflow persisted for ${fileName} after truncation; not retrying.`
