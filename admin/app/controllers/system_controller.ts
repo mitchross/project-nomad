@@ -1,4 +1,6 @@
 import { DockerService } from '#services/docker_service'
+import { ServiceIntegrationResolver } from '#services/service_integration/resolver'
+import type { ServiceCapabilities } from '#services/service_integration/types'
 import { SystemService } from '#services/system_service'
 import { SystemUpdateService } from '#services/system_update_service'
 import { ContainerRegistryService } from '#services/container_registry_service'
@@ -44,6 +46,27 @@ export default class SystemController {
         private containerRegistryService: ContainerRegistryService
     ) { }
 
+    /**
+     * Per-service capability enforcement (ServiceIntegrationResolver): sends a
+     * 501 with the capability's message and returns true when the operation is
+     * not allowed for this service in this deployment. In the Docker runtime
+     * every managed-workload capability resolves true, preserving upstream
+     * behavior; on Kubernetes the workload capabilities resolve false, exactly
+     * as the previous runtime-level guards did.
+     */
+    private async denyUnlessCapable(
+        serviceName: string,
+        capability: keyof ServiceCapabilities,
+        response: HttpContext['response']
+    ): Promise<boolean> {
+        const verdict = await ServiceIntegrationResolver.assertCapability(serviceName, capability)
+        if (!verdict.allowed) {
+            response.status(501).send({ error: verdict.message })
+            return true
+        }
+        return false
+    }
+
     async getInternetStatus({ }: HttpContext) {
         return await this.systemService.getInternetStatus();
     }
@@ -57,11 +80,8 @@ export default class SystemController {
     }
 
     async installService({ request, response }: HttpContext) {
-        if (DockerService.isKubernetesMode()) {
-            return response.status(501).send({ error: 'Service installation is managed by Kubernetes' })
-        }
-
         const payload = await request.validateUsing(installServiceValidator)
+        if (await this.denyUnlessCapable(payload.service_name, 'canInstall', response)) return
 
         const result = await this.dockerService.createContainerPreflight(payload.service_name)
         if (result.success) {
@@ -72,11 +92,9 @@ export default class SystemController {
     }
 
     async affectService({ request, response }: HttpContext) {
-        if (DockerService.isKubernetesMode()) {
-            return response.status(501).send({ error: 'Service lifecycle is managed by Kubernetes' })
-        }
-
         const payload = await request.validateUsing(affectServiceValidator)
+        const capability = payload.action === 'restart' ? 'canRestart' : 'canStartStop'
+        if (await this.denyUnlessCapable(payload.service_name, capability, response)) return
         const result = await this.dockerService.affectContainer(payload.service_name, payload.action)
         if (!result) {
             response.internalServerError({ error: 'Failed to affect service' })
@@ -91,11 +109,8 @@ export default class SystemController {
     }
 
     async forceReinstallService({ request, response }: HttpContext) {
-        if (DockerService.isKubernetesMode()) {
-            return response.status(501).send({ error: 'Service reinstallation is managed by Kubernetes' })
-        }
-
         const payload = await request.validateUsing(installServiceValidator)
+        if (await this.denyUnlessCapable(payload.service_name, 'canInstall', response)) return
         const result = await this.dockerService.forceReinstall(payload.service_name)
         if (!result) {
             response.internalServerError({ error: 'Failed to force reinstall service' })
@@ -266,11 +281,8 @@ export default class SystemController {
     }
 
     async updateService({ request, response }: HttpContext) {
-        if (DockerService.isKubernetesMode()) {
-            return response.status(501).send({ error: 'Service updates are managed by Kubernetes' })
-        }
-
         const payload = await request.validateUsing(updateServiceValidator)
+        if (await this.denyUnlessCapable(payload.service_name, 'canUpdateWorkload', response)) return
         const result = await this.dockerService.updateContainer(
             payload.service_name,
             payload.target_version
@@ -479,6 +491,7 @@ export default class SystemController {
     /** Delete a custom app: stop + remove its container, then delete the DB record. */
     async deleteCustomApp({ request, response }: HttpContext) {
         const payload = await request.validateUsing(deleteCustomAppValidator)
+        if (await this.denyUnlessCapable(payload.service_name, 'canUninstall', response)) return
 
         const service = await Service.query().where('service_name', payload.service_name).first()
         if (!service) {
@@ -500,6 +513,7 @@ export default class SystemController {
      * which also drops their DB record. */
     async uninstallService({ request, response }: HttpContext) {
         const payload = await request.validateUsing(uninstallServiceValidator)
+        if (await this.denyUnlessCapable(payload.service_name, 'canUninstall', response)) return
 
         const service = await Service.query().where('service_name', payload.service_name).first()
         if (!service) {
@@ -558,6 +572,7 @@ export default class SystemController {
     /** Re-pull a custom app's image and recreate its container in place (preserving volumes). */
     async updateCustomApp_pullLatest({ request, response }: HttpContext) {
         const payload = await request.validateUsing(installServiceValidator)
+        if (await this.denyUnlessCapable(payload.service_name, 'canUpdateWorkload', response)) return
 
         const service = await Service.query().where('service_name', payload.service_name).first()
         if (!service) {
@@ -578,6 +593,7 @@ export default class SystemController {
 
     /** Return the last N lines of a service container's logs. */
     async getServiceLogs({ params, request, response }: HttpContext) {
+        if (await this.denyUnlessCapable(params.name, 'canViewLogs', response)) return
         // Scope to managed services only — otherwise any sibling container's logs (admin app,
         // database) would be readable by name on this unauthenticated API surface.
         const service = await Service.query().where('service_name', params.name).first()
@@ -594,6 +610,7 @@ export default class SystemController {
 
     /** Return a one-shot CPU/memory usage snapshot for a running service container. */
     async getServiceStats({ params, response }: HttpContext) {
+        if (await this.denyUnlessCapable(params.name, 'canViewStats', response)) return
         // Scope to managed services only (see getServiceLogs).
         const service = await Service.query().where('service_name', params.name).first()
         if (!service) {
@@ -624,6 +641,7 @@ export default class SystemController {
      * user-modified so the seeder stops overwriting the user's changes. */
     async updateCustomApp({ request, response }: HttpContext) {
         const payload = await request.validateUsing(updateCustomAppValidator)
+        if (await this.denyUnlessCapable(payload.service_name, 'canUpdateWorkload', response)) return
 
         const service = await Service.query().where('service_name', payload.service_name).first()
         if (!service) {

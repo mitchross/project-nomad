@@ -1,4 +1,5 @@
 import Service from '#models/service'
+import type { ServiceIntegration } from '../app/services/service_integration/types.js'
 
 export type ServiceSlim = Pick<
   Service,
@@ -20,4 +21,13 @@ export type ServiceSlim = Pick<
   | 'is_user_modified'
   | 'is_deprecated'
   | 'category'
-> & { status?: string }
+> & {
+  status?: string
+  /**
+   * Per-service integration descriptor (ownership, availability, endpoints,
+   * capabilities) — computed server-side, never persisted. See
+   * app/services/service_integration/. UI consumption lands in the Supply
+   * Depot capability work; until then this field is additive.
+   */
+  integration?: ServiceIntegration
+}
