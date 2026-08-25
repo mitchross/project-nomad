@@ -22,6 +22,7 @@ import { getPrimaryDiskInfo } from '~/hooks/useDiskDisplayData'
 import classNames from 'classnames'
 import type { CategoryWithStatus, SpecTier, SpecResource } from '../../../types/collections'
 import { resolveTierResources } from '~/lib/collections'
+import { can } from '~/lib/service_capabilities'
 import { SERVICE_NAMES } from '../../../constants/service_names'
 
 // Capability definitions - maps user-friendly categories to services
@@ -416,9 +417,16 @@ export default function EasySetupWizard(props: {
 
       // All of these ops don't actually wait for completion, they just kick off the process, so we can run them in parallel without awaiting each one sequentially
       // Exclude Ollama from local install when using remote mode
-      const servicesToInstall = remoteOllamaEnabled
+      const servicesToInstall = (remoteOllamaEnabled
         ? selectedServices.filter((s) => s !== SERVICE_NAMES.OLLAMA)
         : selectedServices
+      ).filter((serviceName) => {
+        // Skip services NOMAD cannot install in this deployment (the cluster or
+        // an external operator owns them) — the server would refuse the call,
+        // and content/model downloads below still work regardless.
+        const service = allServices.find((s) => s.service_name === serviceName)
+        return service ? can(service, 'canInstall') : true
+      })
       const installPromises = servicesToInstall.map((serviceName) => api.installService(serviceName))
 
       await Promise.all(installPromises)

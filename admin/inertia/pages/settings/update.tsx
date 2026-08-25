@@ -22,6 +22,13 @@ type Props = {
   latestVersion: string
   currentVersion: string
   earlyAccess: boolean
+  /**
+   * Whether NOMAD's managed Docker runtime can perform workload updates.
+   * False when the cluster owns workloads (updates are image-tag bumps in
+   * your deployment) — the core/app panels become informational there.
+   * Server-side the update endpoints already refuse; this stops offering them.
+   */
+  canUpdateWorkloads?: boolean
 }
 
 const STAGE_LABELS: Record<SystemUpdateStatus['stage'], string> = {
@@ -43,6 +50,9 @@ const ADVANCED_STAGES: ReadonlySet<SystemUpdateStatus['stage']> = new Set([
 
 export default function SystemUpdatePage(props: { system: Props }) {
   const { addNotification } = useNotifications()
+  // Default true so any response predating this flag keeps upstream behavior;
+  // the server refuses the operations independently either way.
+  const canUpdateWorkloads = props.system.canUpdateWorkloads ?? true
 
   const [isUpdating, setIsUpdating] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<SystemUpdateStatus | null>(null)
@@ -350,6 +360,7 @@ export default function SystemUpdatePage(props: { system: Props }) {
               )}
               {!isUpdating && (
                 <div className="flex justify-center gap-4">
+                  {canUpdateWorkloads ? (
                   <StyledButton
                     variant="primary"
                     size="lg"
@@ -359,6 +370,12 @@ export default function SystemUpdatePage(props: { system: Props }) {
                   >
                     {versionInfo.updateAvailable ? 'Start Update' : 'No Update Available'}
                   </StyledButton>
+                  ) : (
+                  <p className="text-sm text-text-muted max-w-md text-center self-center">
+                    Updates are applied by your deployment — bump the NOMAD image tag in
+                    your Kubernetes manifests (Kustomize/GitOps) to take this version.
+                  </p>
+                  )}
                   <StyledButton
                     variant="ghost"
                     size="lg"
@@ -452,8 +469,9 @@ export default function SystemUpdatePage(props: { system: Props }) {
               description="Receive release candidate (RC) versions before they are officially released. Note: RC versions may contain bugs and are not recommended for environments where stability and data integrity are critical."
             />
           </div>
-          <CoreAutoUpdateSection />
-          <AppAutoUpdateSection />
+          {canUpdateWorkloads && <CoreAutoUpdateSection />}
+          {canUpdateWorkloads && <AppAutoUpdateSection />}
+          {/* Content updates work in every runtime — NOMAD owns that content. */}
           <ContentAutoUpdateSection />
           <ContentUpdatesSection />
           <div className="bg-surface-primary rounded-lg border shadow-md overflow-hidden py-6 mt-12">

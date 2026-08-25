@@ -39,6 +39,7 @@ jobs:
           --files remote_ollama_config
           --files service_integration_resolver
           --files service_integration_probes
+          --files service_capabilities_selector
           --force-exit
         working-directory: ./admin
         env:

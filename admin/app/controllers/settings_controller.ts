@@ -8,6 +8,8 @@ import { inject } from '@adonisjs/core'
 import type { HttpContext } from '@adonisjs/core/http'
 import env from '#start/env'
 import { DockerService } from '#services/docker_service'
+import { ServiceIntegrationResolver } from '#services/service_integration/resolver'
+import { SERVICE_NAMES } from '../../constants/service_names.js'
 import { resolveRemoteConfigLock } from '../services/llm/remote_ollama_config.js'
 
 @inject()
@@ -65,13 +67,19 @@ export default class SettingsController {
     // (i.e. Ollama). For OpenAI-compatible providers, model installation is external.
     // The provider getter throws on a misconfig (LLM_PROVIDER=openai without
     // LLM_HOST) — render the page degraded rather than 500ing settings.
+    // Backend TECHNICAL capability (can this protocol manage models at all?)
     let supportsModelMgmt = false
     try {
       supportsModelMgmt = this.ollamaService.provider.supportsModelManagement()
     } catch {
       // treat as no model management
     }
-    const availableModels = supportsModelMgmt
+    // NOMAD's AUTHORIZATION to mutate this backend's models (ownership), from
+    // the service integration resolver. Both must hold: a shared/external
+    // Ollama technically supports pulls but is not ours to modify.
+    const aiIntegration = await ServiceIntegrationResolver.resolve(SERVICE_NAMES.OLLAMA)
+    const canManageModels = supportsModelMgmt && (aiIntegration?.capabilities.canManageModels ?? true)
+    const availableModels = canManageModels
       ? await this.ollamaService.getAvailableModels({
           sort: 'pulls',
           recommendedOnly: false,
@@ -104,6 +112,7 @@ export default class SettingsController {
           aiAssistantCustomName: aiAssistantCustomName ?? '',
           remoteOllamaUrl: remoteOllamaUrl ?? '',
           remoteOllamaLock,
+          canManageModels,
           ollamaFlashAttention: ollamaFlashAttention ?? true,
           autoThinking: autoThinking ?? false,
         },
@@ -113,11 +122,18 @@ export default class SettingsController {
 
   async update({ inertia }: HttpContext) {
     const updateInfo = await this.systemService.checkLatestVersion()
+    // Core and app workload updates require NOMAD's managed Docker runtime
+    // (updater sidecar, image pull + container recreation). Where the cluster
+    // owns workloads these are image-tag bumps in your deployment, so the
+    // panels are informational only. Content updates are unaffected — NOMAD
+    // owns that content in every runtime.
+    const canUpdateWorkloads = ServiceIntegrationResolver.canProvisionWorkloads()
     return inertia.render('settings/update', {
       system: {
         updateAvailable: updateInfo.updateAvailable,
         latestVersion: updateInfo.latestVersion,
         currentVersion: updateInfo.currentVersion,
+        canUpdateWorkloads,
       },
     })
   }
@@ -137,11 +153,15 @@ export default class SettingsController {
   async benchmark({ inertia }: HttpContext) {
     const latestResult = await this.benchmarkService.getLatestResult()
     const status = this.benchmarkService.getStatus()
+    // System benchmarks shell out to sysbench in Docker — unavailable when the
+    // cluster owns workloads. AI-only benchmarks still work against any backend.
+    const canRunSystemBenchmark = ServiceIntegrationResolver.canProvisionWorkloads()
     return inertia.render('settings/benchmark', {
       benchmark: {
         latestResult,
         status: status.status,
         currentBenchmarkId: status.benchmarkId,
+        canRunSystemBenchmark,
       },
     })
   }
