@@ -32,10 +32,26 @@ export class OllamaProvider implements LLMProvider {
   // only safe against the NOMAD-managed local container — a remote endpoint
   // (env- or Settings-configured) may be shared with other users/apps.
   private hostSource: 'env' | 'remote-config' | 'managed-container' | null = null
+  /** Host injected by the factory (post-precedence), when there is one. */
+  private readonly injected?: { host: string; source: 'env' | 'settings' | 'managed-container' }
+
+  constructor(injected?: { host: string; source: 'env' | 'settings' | 'managed-container' }) {
+    this.injected = injected
+  }
 
   private async _initialize() {
     if (!this.initPromise) {
       this.initPromise = (async () => {
+        // The factory resolves configuration precedence (env → Settings →
+        // managed container) centrally and injects the result. Fall back to
+        // resolving here when constructed directly (legacy call sites/tests).
+        if (this.injected?.host) {
+          this.resolvedHost = this.injected.host.replace(/\/+$/, '')
+          this.ollama = new Ollama({ host: this.injected.host })
+          this.hostSource = this.injected.source === 'settings' ? 'remote-config' : this.injected.source
+          return
+        }
+
         const host = env.get('LLM_HOST') || env.get('OLLAMA_HOST')
         if (host) {
           this.resolvedHost = host.replace(/\/+$/, '')

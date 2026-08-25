@@ -91,6 +91,10 @@ export default class SettingsController {
     const chatSuggestionsEnabled = await KVStore.getValue('chat.suggestionsEnabled')
     const aiAssistantCustomName = await KVStore.getValue('ai.assistantCustomName')
     const remoteOllamaUrl = await KVStore.getValue('ai.remoteOllamaUrl')
+    // Protocol/ownership of the Settings-configured remote. Absent protocol on
+    // an existing URL means a pre-selection install: those were always Ollama.
+    const remoteProtocol = (await KVStore.getValue('ai.remoteProtocol')) || 'ollama'
+    const remoteManagedByNomad = (await KVStore.getValue('ai.remoteManagedByNomad')) ?? false
     // Who owns AI backend selection — the Settings Remote Ollama flow is only
     // live for the Docker/Compose appliance; Kubernetes/BYO configure the
     // backend declaratively (env/Kustomize). Server-side enforcement lives in
@@ -111,6 +115,8 @@ export default class SettingsController {
           chatSuggestionsEnabled: chatSuggestionsEnabled ?? false,
           aiAssistantCustomName: aiAssistantCustomName ?? '',
           remoteOllamaUrl: remoteOllamaUrl ?? '',
+          remoteProtocol: remoteProtocol === 'openai' ? 'openai' : 'ollama',
+          remoteManagedByNomad,
           remoteOllamaLock,
           canManageModels,
           ollamaFlashAttention: ollamaFlashAttention ?? true,

@@ -49,6 +49,11 @@ export interface ResolutionContext {
   llmProviderType: 'ollama' | 'openai'
   /** Settings-configured remote Ollama URL (Docker appliance only). */
   kvRemoteOllamaUrl: string | null
+  /**
+   * Explicit operator answer to "may NOMAD manage models on this backend?"
+   * null = never answered, so the documented defaults apply.
+   */
+  kvRemoteManagedByNomad: boolean | null
   /** Docker container status by service name ('running', 'exited', ...). */
   dockerStatusFor: (serviceName: string) => string | undefined
   /** Cached availability for an API endpoint (never probes inline). */
@@ -139,17 +144,25 @@ export function resolveIntegration(
   let modelOwner: ServiceIntegration['modelOwner']
   let contentOwner: ServiceIntegration['contentOwner']
   if (row.service_name === SERVICE_NAMES.OLLAMA) {
-    // A Settings-configured remote Ollama is conservatively externally owned
-    // (matches the PR 0 no-eviction rule) even though the LOCAL workload
-    // remains Docker-managed.
-    modelOwner =
-      !isKubernetes && (ctx.kvRemoteOllamaUrl || ctx.envValue('LLM_HOST') || ctx.envValue('OLLAMA_HOST'))
-        ? 'external'
-        : defaultModelOwner({
-            runtimeContext: ctx.runtimeContext,
-            provisioner,
-            llmProviderType: ctx.llmProviderType,
-          })
+    const usesRemoteBackend = !!(
+      ctx.kvRemoteOllamaUrl ||
+      ctx.envValue('LLM_HOST') ||
+      ctx.envValue('OLLAMA_HOST')
+    )
+    if (ctx.kvRemoteManagedByNomad !== null && usesRemoteBackend) {
+      // The operator answered explicitly — that always wins over defaults.
+      modelOwner = ctx.kvRemoteManagedByNomad ? 'nomad' : 'external'
+    } else if (!isKubernetes && usesRemoteBackend) {
+      // Unanswered Docker-mode remote: conservatively external (matches the
+      // no-eviction rule) — a remote server may be shared.
+      modelOwner = 'external'
+    } else {
+      modelOwner = defaultModelOwner({
+        runtimeContext: ctx.runtimeContext,
+        provisioner,
+        llmProviderType: ctx.llmProviderType,
+      })
+    }
   }
   if (row.service_name === SERVICE_NAMES.KIWIX) {
     contentOwner = defaultContentOwner(provisioner)
@@ -196,13 +209,19 @@ export class ServiceIntegrationResolver {
   ): Promise<ResolutionContext> {
     const runtimeContext = this.runtimeContext()
     let kvRemoteOllamaUrl: string | null = null
-    if (runtimeContext === 'docker') {
-      try {
-        const { default: KVStore } = await import('#models/kv_store')
+    let kvRemoteManagedByNomad: boolean | null = null
+    try {
+      const { default: KVStore } = await import('#models/kv_store')
+      // The remote URL only participates in provider selection outside
+      // Kubernetes (env config wins there), but the ownership answer applies
+      // in both runtimes — a K8s operator can mark a shared backend hands-off.
+      if (runtimeContext === 'docker') {
         kvRemoteOllamaUrl = await KVStore.getValue('ai.remoteOllamaUrl')
-      } catch {
-        kvRemoteOllamaUrl = null
       }
+      kvRemoteManagedByNomad = await KVStore.getValue('ai.remoteManagedByNomad')
+    } catch {
+      kvRemoteOllamaUrl = null
+      kvRemoteManagedByNomad = null
     }
     const statusMap = new Map(dockerStatuses.map((s) => [s.service_name, s.status]))
     return {
@@ -210,6 +229,7 @@ export class ServiceIntegrationResolver {
       envValue: (name) => process.env[name] || undefined,
       llmProviderType: env.get('LLM_PROVIDER') === 'openai' ? 'openai' : 'ollama',
       kvRemoteOllamaUrl,
+      kvRemoteManagedByNomad,
       dockerStatusFor: (name) => statusMap.get(name),
       availabilityFor: (name, apiUrl) => getCachedAvailability(name, apiUrl),
     }

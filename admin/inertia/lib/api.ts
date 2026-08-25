@@ -58,11 +58,21 @@ class API {
     })()
   }
 
-  async configureRemoteOllama(remoteUrl: string | null): Promise<{ success: boolean; message: string }> {
+  async configureRemoteOllama(
+    remoteUrl: string | null,
+    options?: { protocol?: 'ollama' | 'openai'; apiKey?: string | null; managedByNomad?: boolean }
+  ): Promise<{ success: boolean; message: string }> {
     return catchInternal(async () => {
       const response = await this.client.post<{ success: boolean; message: string }>(
         '/ollama/configure-remote',
-        { remoteUrl }
+        {
+          remoteUrl,
+          // Omitted options keep the server's backwards-compatible defaults
+          // (protocol: ollama, no key, models NOT managed by NOMAD).
+          protocol: options?.protocol,
+          apiKey: options?.apiKey,
+          managedByNomad: options?.managedByNomad,
+        }
       )
       return response.data
     })()

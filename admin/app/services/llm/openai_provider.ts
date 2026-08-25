@@ -6,6 +6,22 @@
  */
 
 import logger from '@adonisjs/core/services/logger'
+import env from '#start/env'
+/**
+ * Known reasoning-model families served over OpenAI-compatible APIs. Matched
+ * as case-insensitive substrings of the model name; override per-deployment
+ * with LLM_THINKING_MODELS.
+ */
+export const DEFAULT_THINKING_MODEL_PATTERNS = [
+  'deepseek-r1',
+  'qwq',
+  'qwen3',
+  'gpt-oss',
+  'magistral',
+  'phi-4-reasoning',
+  'thinking',
+  'reasoner',
+]
 import type {
   LLMProvider,
   ChatRequest,
@@ -279,9 +295,25 @@ export class OpenAIProvider implements LLMProvider {
     return false
   }
 
-  async checkModelHasThinking(_modelName: string): Promise<boolean> {
-    // OpenAI-compatible servers don't expose capability metadata
-    // Default to false — can be overridden via env config in the future
-    return false
+  async checkModelHasThinking(modelName: string): Promise<boolean> {
+    // OpenAI-compatible servers expose no capability metadata (there is no
+    // /api/show equivalent), so this is inferred from the served model's name.
+    //
+    // Getting this wrong is cheap in one direction and not the other: a false
+    // negative means a reasoning model never receives reasoning_effort and
+    // silently emits its reasoning inline; a false positive only adds a
+    // parameter most servers ignore. The <think>-tag parser in chatStream
+    // handles reasoning either way — this just lets NOMAD ASK for it.
+    //
+    // Operators can override per-deployment with LLM_THINKING_MODELS (a
+    // comma-separated list of substrings) when serving a reasoning model under
+    // a name this list doesn't recognize.
+    const configured = env.get('LLM_THINKING_MODELS', '')
+    const patterns = configured
+      ? configured.split(',').map((p) => p.trim().toLowerCase()).filter(Boolean)
+      : DEFAULT_THINKING_MODEL_PATTERNS
+
+    const name = modelName.toLowerCase()
+    return patterns.some((pattern) => name.includes(pattern))
   }
 }
