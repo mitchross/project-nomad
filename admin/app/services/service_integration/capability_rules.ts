@@ -7,17 +7,11 @@ import type {
   WorkloadProvisioner,
 } from './types.js'
 
-/**
- * Pure capability rules: (runtime, provisioner, service identity, owners) →
- * what NOMAD may do. No I/O — fully table-testable.
- *
- * PR 1 behavior-parity contract: the ENFORCED workload capabilities must
- * reproduce today's guard outcomes exactly — in the Docker runtime every
- * managed workload operation is allowed (as upstream ships), and on
- * Kubernetes they are all refused (as the PR 0 runtime guards did). The
- * model/content fields are descriptive target semantics consumed by later
- * PRs; they change no behavior here.
- */
+// Pure capability rules: (runtime, provisioner, service identity, owners) →
+// what NOMAD may do. No I/O, fully table-testable.
+//
+// Workload capabilities reproduce the runtime guards exactly: allowed for every
+// managed workload under Docker, refused under Kubernetes.
 
 const NO_WORKLOAD_CAPS = {
   canInstall: false,
@@ -67,18 +61,11 @@ export function computeCapabilities(input: {
 }
 
 /**
- * Default resource-ownership rules, until an explicit ownership setting
- * exists (PR 3). Documented assumptions:
- *
- * - Docker-managed local Ollama: NOMAD owns the models (upstream appliance).
- * - Kubernetes Ollama via LLM_HOST/OLLAMA_HOST with the ollama provider: the
- *   bundled, NOMAD-dedicated deployment (the Kustomize component) is assumed
- *   — models are NOMAD-owned, matching today's working model management.
- *   A SHARED external Ollama on Kubernetes needs the PR 3 opt-out.
- * - Docker-mode Settings-configured remote Ollama: conservatively external —
- *   consistent with the PR 0 rule that already stops model eviction there.
- * - OpenAI-compatible providers (vLLM etc.): external; the API cannot manage
- *   models anyway.
+ * Default ownership when no explicit setting exists. A Docker-managed local
+ * Ollama is NOMAD's; a Kubernetes Ollama on LLM_HOST/OLLAMA_HOST is assumed to
+ * be the bundled NOMAD-dedicated deployment (a shared one needs the opt-out);
+ * a Settings-configured remote is conservatively external, as is any
+ * OpenAI-compatible provider, whose API can't manage models anyway.
  */
 export function defaultModelOwner(input: {
   runtimeContext: RuntimeContext
@@ -92,10 +79,9 @@ export function defaultModelOwner(input: {
 }
 
 /**
- * Kiwix content ownership: NOMAD owns the shared ZIM library and its XML in
- * every currently supported topology (Docker bind mount or the shared-PVC
- * Kubernetes component). An endpoint-only external Kiwix — where this becomes
- * 'external' — is a PR 5 concern.
+ * NOMAD owns the shared ZIM library and its XML in every supported topology
+ * (Docker bind mount, or the shared-PVC Kubernetes component). An
+ * endpoint-only external Kiwix would be 'external'; not yet supported.
  */
 export function defaultContentOwner(provisioner: WorkloadProvisioner): ResourceOwner {
   return provisioner === 'none' ? 'none' : 'nomad'

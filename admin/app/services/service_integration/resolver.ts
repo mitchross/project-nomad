@@ -24,14 +24,12 @@ import type {
  * the static class methods gather the real context and are the entry points
  * for controllers and `SystemService.getServices()`.
  *
- * PR 1 contract:
- * - Descriptors are additive. `Service.installed` and the Kubernetes env
- *   sync keep their existing meaning as a compatibility shim.
- * - Enforced (workload) capabilities reproduce today's guard outcomes
- *   exactly: allowed in the Docker runtime, refused on Kubernetes.
- * - In the Docker runtime the provisioner describes the LOCAL workload —
- *   a Settings-configured remote Ollama changes the AI endpoint and model
- *   ownership, not who provisions the local container.
+ * Descriptors are additive: `Service.installed` and the Kubernetes env sync
+ * keep their existing meaning. Workload capabilities reproduce the runtime
+ * guards exactly — allowed under Docker, refused under Kubernetes. Under
+ * Docker the provisioner describes the LOCAL workload: a Settings-configured
+ * remote Ollama moves the AI endpoint and model ownership, not who provisions
+ * the container.
  */
 
 /** Browser-facing ui_location env overrides in Kubernetes (see k8s sync). */

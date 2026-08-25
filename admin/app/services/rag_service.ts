@@ -155,10 +155,8 @@ export class RagService {
         // instead of silently mixing incompatible vectors.
         await this._recordEmbeddingFingerprint(collectionName)
       } else {
-        // Throws EmbeddingIdentityMismatchError when the collection was built
-        // with a different embedding configuration. Never mutates or deletes
-        // anything — the operator chooses between restoring settings and
-        // reindexing.
+        // Throws EmbeddingIdentityMismatchError on a config change. Never
+        // mutates or deletes — the operator chooses restore vs reindex.
         await this._verifyEmbeddingIdentity(collectionName, dimensions)
       }
 
@@ -185,10 +183,9 @@ export class RagService {
   }
 
   /**
-   * Guard the embedding response shape: one vector per input, each of the
-   * configured dimension. Mismatches mean the backend is serving a different
-   * model than configured (or is misbehaving) — fail loudly here rather than
-   * writing misaligned or wrong-sized vectors into the knowledge base.
+   * One vector per input, each of the configured dimension. A mismatch means
+   * the backend is serving something other than the configured model — fail
+   * here rather than writing misaligned vectors into the knowledge base.
    */
   private _assertEmbeddingResponse(
     embeddings: number[][] | undefined,
@@ -211,10 +208,9 @@ export class RagService {
   }
 
   /**
-   * The embedding identity this deployment is currently configured to produce.
-   * Endpoint is the dedicated embedding host when set, otherwise the LLM host —
-   * matching how embeddings are actually routed. Credentials are excluded by
-   * construction (see normalizeEndpoint).
+   * The identity this deployment is configured to produce. Endpoint is the
+   * dedicated embedding host when set, else the LLM host — matching how
+   * embeddings actually route.
    */
   private _currentEmbeddingIdentity(): EmbeddingIdentity {
     const endpoint = env.get('EMBEDDING_HOST') || env.get('LLM_HOST') || env.get('OLLAMA_HOST') || ''
@@ -256,19 +252,13 @@ export class RagService {
   }
 
   /**
-   * Verify that an existing collection was built by the currently configured
-   * embedding setup. Two independent checks:
+   * Two checks against an existing collection: Qdrant's actual vector size vs
+   * configured dimensions (ground truth, always fatal), and the recorded
+   * fingerprint vs the current one (catches the silent same-dimension case).
    *
-   *  1. Qdrant's ACTUAL vector size vs the configured dimensions — verifiable
-   *     ground truth, so a mismatch is always fatal (writes/searches would
-   *     error anyway).
-   *  2. The recorded fingerprint vs the current one — catches the dangerous
-   *     silent case (same dimensions, different model/endpoint/prefixes).
-   *
-   * Collections that predate fingerprinting have nothing recorded. There is no
-   * evidence of a mismatch for them, and refusing would break every existing
-   * install, so the current identity is adopted and logged — observation starts
-   * now, and any subsequent change is caught.
+   * Collections predating fingerprinting have nothing recorded and no evidence
+   * of mismatch, so the current identity is adopted and logged rather than
+   * refused — observation starts now.
    */
   private async _verifyEmbeddingIdentity(collectionName: string, dimensions: number): Promise<void> {
     let actualSize: number | undefined
@@ -444,20 +434,13 @@ export class RagService {
   }
 
   /**
-   * Resolve which embedding model to use for this deployment, honoring the
-   * EMBEDDING_MODEL env var. Deployment-agnostic by design:
+   * Resolve the embedding model, honoring EMBEDDING_MODEL. A dedicated
+   * EMBEDDING_HOST or a provider without model management is trusted as
+   * configured; Ollama is verified and optionally auto-pulled (keeping the
+   * zero-config nomic UX), falling back to an installed nomic tag.
    *
-   * - EMBEDDING_HOST set: a dedicated embedding service serves EMBEDDING_MODEL;
-   *   we neither verify nor pull it through the main LLM provider.
-   * - Provider without model management (OpenAI-compatible, e.g. vLLM/llama.cpp):
-   *   we can't list or pull models, so we trust EMBEDDING_MODEL as configured.
-   * - Provider with model management (Ollama, local or remote): verify the model
-   *   is installed, optionally auto-pull it (preserving the zero-config nomic UX),
-   *   and fall back to any installed nomic-embed-text tag.
-   *
-   * Returns the resolved model name, or null if it genuinely can't be made
-   * available (Ollama reachable but the model is missing and a pull was not done
-   * or failed). Caches the result in resolvedEmbeddingModel once verified.
+   * Null when the model genuinely can't be made available. Caches into
+   * resolvedEmbeddingModel once verified.
    */
   private async _resolveEmbeddingModel(autoDownload: boolean): Promise<string | null> {
     if (this.embeddingModelVerified && this.resolvedEmbeddingModel) {
@@ -582,10 +565,8 @@ export class RagService {
 
         const response = await this.ollamaService.embed(resolvedModel, batch)
 
-        // Validate the response before it reaches Qdrant. A backend that
-        // returns fewer vectors than inputs (or vectors of the wrong size)
-        // would otherwise shift chunk↔vector alignment or be rejected deep
-        // inside upsert with an opaque error.
+        // Fewer vectors than inputs shifts chunk↔vector alignment; wrong-sized
+        // ones are rejected deep inside upsert with an opaque error.
         this._assertEmbeddingResponse(response.embeddings, batch.length, resolvedModel)
 
         embeddings.push(...response.embeddings)

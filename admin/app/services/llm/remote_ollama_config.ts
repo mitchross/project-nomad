@@ -1,18 +1,12 @@
 /**
- * Shared protocol probes and configuration-lock rules for the Settings
- * "Remote Ollama" flow (OllamaController.configureRemote / remoteStatus).
+ * Shared protocol probes and config-lock rules for the Settings "Remote Ollama"
+ * flow. Save-time validation and the status check must use the same probe, or
+ * Save & Test and the status indicator disagree about what counts as valid.
  *
- * Both the save-time validation and the later connection-status check MUST use
- * the same probe, or Save & Test and the status indicator can disagree about
- * what counts as a valid Ollama backend (Codex finding P1.3 follow-up).
- *
- * The lock rules keep the boundary honest: the Settings field belongs to the
- * Docker/Compose appliance. When deployment configuration (LLM_PROVIDER /
- * LLM_HOST / OLLAMA_HOST) already owns provider selection — always the case
- * for Kubernetes/BYO — the KV URL would be saved but never win provider
- * resolution, so the save must be refused with an actionable message rather
- * than reporting a success that isn't real. Provider precedence itself
- * (env → KV → managed container) is deliberately unchanged.
+ * The Settings field belongs to the Docker appliance. Where env config already
+ * owns provider selection — always so on Kubernetes/BYO — a saved KV URL could
+ * never win resolution, so the save is refused rather than reporting a success
+ * that isn't real. Precedence itself (env → KV → container) is unchanged.
  */
 
 type FetchLike = (url: string, init: { signal: AbortSignal }) => Promise<{ ok: boolean }>
@@ -56,15 +50,10 @@ export function normalizeBase(baseUrl: string): string {
 export type RemoteConfigLock = 'kubernetes' | 'env' | null
 
 /**
- * Who owns AI backend selection for this deployment?
- *
- * - 'kubernetes': Kubernetes/BYO deployments configure AI declaratively
- *   (env/Kustomize) until the provider/integration UI lands; the Settings
- *   mutation is refused there regardless of env vars.
- * - 'env': LLM_PROVIDER=openai or an LLM_HOST/OLLAMA_HOST env host outranks
- *   the KV URL in provider resolution, so a Settings save could never take
- *   effect and must be refused.
- * - null: the Docker/Compose appliance owns selection — Settings flow works.
+ * Who owns AI backend selection: 'kubernetes' (configured declaratively, so the
+ * Settings mutation is refused regardless of env vars), 'env' (an LLM_PROVIDER
+ * or LLM_HOST/OLLAMA_HOST setting outranks the KV URL, so a save could never
+ * take effect), or null (the Docker appliance owns it — Settings works).
  */
 export function resolveRemoteConfigLock(input: {
   kubernetesMode: boolean
