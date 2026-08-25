@@ -6,14 +6,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Redis backs the focused unit-test step: the app's shared BullMQ/ioredis
-    # connection otherwise raises unhandled connection errors at teardown.
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -32,7 +24,10 @@ jobs:
         run: npm run build
         working-directory: ./admin
 
-      # Focused, deterministic unit specs only (no database required).
+      # Focused, deterministic unit specs only — hermetic: no database or
+      # Redis required (config/transmit.ts uses the in-memory transport for
+      # NODE_ENV=test, and nothing here touches BullMQ queues). If future
+      # specs exercise queues, add a redis service container to this job.
       # Running the complete unit/functional suite in CI needs provisioned
       # MySQL + fixtures and is tracked as a follow-up.
       - name: Run focused unit tests

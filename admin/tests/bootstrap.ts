@@ -23,7 +23,24 @@ export const plugins: Config['plugins'] = [assert(), pluginAdonisJS(app)]
  */
 export const runnerHooks: Required<Pick<Config, 'setup' | 'teardown'>> = {
   setup: [],
-  teardown: [],
+  teardown: [
+    // Close the long-lived Redis connections (the shared BullMQ client and
+    // transmit's transport) before the process exits. Without this, the exit —
+    // especially under --force-exit — races those sockets, and ioredis flushes
+    // their queues with "Connection is closed" errors that Japa reports as
+    // Unhandled Errors, failing a run whose tests all passed.
+    async () => {
+      try {
+        const { default: queueConfig } = await import('#config/queue')
+        queueConfig.connection.disconnect()
+      } catch {
+        // connection never created — nothing to close
+      }
+      // transmit needs no teardown here: config/transmit.ts selects the
+      // in-memory transport for NODE_ENV=test, so no Redis pub/sub clients
+      // exist in test runs (their eager connections were the exit-race).
+    },
+  ],
 }
 
 /**
