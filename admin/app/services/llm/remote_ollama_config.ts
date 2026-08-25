@@ -83,3 +83,51 @@ export const REMOTE_CONFIG_LOCK_MESSAGES: Record<Exclude<RemoteConfigLock, null>
   env:
     'The AI backend is already selected by deployment environment variables (LLM_PROVIDER / LLM_HOST / OLLAMA_HOST), which take precedence over this Settings field. Change or unset those variables to manage the backend here.',
 }
+
+/** Backend protocols a KV-configured remote can speak. */
+export type RemoteProtocol = 'ollama' | 'openai'
+
+export function isRemoteProtocol(value: unknown): value is RemoteProtocol {
+  return value === 'ollama' || value === 'openai'
+}
+
+/**
+ * Validate a remote backend by probing the protocol it CLAIMS to speak, and
+ * report a mismatch when the other protocol answers instead. Save & Test,
+ * connection status, and provider selection then agree by construction.
+ */
+export async function validateRemoteBackend(
+  baseUrl: string,
+  protocol: RemoteProtocol,
+  timeoutMs = 5000,
+  fetchImpl: FetchLike = fetch
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const wantsNative = protocol === 'ollama'
+  const claimed = wantsNative
+    ? await probeNativeOllama(baseUrl, timeoutMs, fetchImpl)
+    : await probeOpenAICompatible(baseUrl, timeoutMs, fetchImpl)
+
+  if (claimed) return { ok: true }
+
+  // The claimed protocol didn't answer — check the other one so the error can
+  // name the actual fix instead of a generic "could not connect".
+  const other = wantsNative
+    ? await probeOpenAICompatible(baseUrl, timeoutMs, fetchImpl)
+    : await probeNativeOllama(baseUrl, timeoutMs, fetchImpl)
+
+  if (other) {
+    return {
+      ok: false,
+      message: wantsNative
+        ? 'This server answered an OpenAI-compatible request but not Ollama\'s native API. Select "OpenAI-compatible" as the backend type (vLLM, llama.cpp, LM Studio, ...).'
+        : 'This server answered Ollama\'s native API but not an OpenAI-compatible request. Select "Ollama" as the backend type.',
+    }
+  }
+
+  return {
+    ok: false,
+    message: wantsNative
+      ? `Could not reach an Ollama server at ${baseUrl}. Make sure it is running, reachable, and started with OLLAMA_HOST=0.0.0.0.`
+      : `Could not reach an OpenAI-compatible server at ${baseUrl}. Check the URL (it usually ends in /v1) and that the server is running.`,
+  }
+}

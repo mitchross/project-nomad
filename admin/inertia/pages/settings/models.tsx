@@ -26,7 +26,7 @@ export default function ModelsPage(props: {
   models: {
     availableModels: NomadOllamaModel[]
     installedModels: NomadInstalledModel[]
-    settings: { chatSuggestionsEnabled: boolean; aiAssistantCustomName: string; remoteOllamaUrl: string; remoteOllamaLock: 'kubernetes' | 'env' | null; canManageModels: boolean; ollamaFlashAttention: boolean; autoThinking: boolean }
+    settings: { chatSuggestionsEnabled: boolean; aiAssistantCustomName: string; remoteOllamaUrl: string; remoteProtocol: 'ollama' | 'openai'; remoteManagedByNomad: boolean; remoteOllamaLock: 'kubernetes' | 'env' | null; canManageModels: boolean; ollamaFlashAttention: boolean; autoThinking: boolean }
   }
 }) {
   const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
@@ -107,6 +107,13 @@ export default function ModelsPage(props: {
     props.models.settings.aiAssistantCustomName
   )
   const [remoteOllamaUrl, setRemoteOllamaUrl] = useState(props.models.settings.remoteOllamaUrl)
+  const [remoteProtocol, setRemoteProtocol] = useState<'ollama' | 'openai'>(
+    props.models.settings.remoteProtocol
+  )
+  const [remoteApiKey, setRemoteApiKey] = useState('')
+  const [remoteManagedByNomad, setRemoteManagedByNomad] = useState(
+    props.models.settings.remoteManagedByNomad
+  )
   const [remoteOllamaError, setRemoteOllamaError] = useState<string | null>(null)
   const [remoteOllamaSaving, setRemoteOllamaSaving] = useState(false)
 
@@ -114,7 +121,11 @@ export default function ModelsPage(props: {
     setRemoteOllamaError(null)
     setRemoteOllamaSaving(true)
     try {
-      const res = await api.configureRemoteOllama(remoteOllamaUrl || null)
+      const res = await api.configureRemoteOllama(remoteOllamaUrl || null, {
+        protocol: remoteProtocol,
+        apiKey: remoteApiKey || null,
+        managedByNomad: remoteManagedByNomad,
+      })
       if (res?.success) {
         addNotification({ message: res.message, type: 'success' })
         router.reload()
@@ -425,18 +436,49 @@ export default function ModelsPage(props: {
             ) : (
             <>
             <p className="text-sm text-text-secondary mb-4">
-              Connect to a remote <strong>Ollama</strong> instance running on another machine.
-              The remote host must be started with <code className="bg-surface-secondary px-1 rounded">OLLAMA_HOST=0.0.0.0</code>.
-              OpenAI-compatible servers (vLLM, llama.cpp, LM Studio, ...) are configured differently — via the{' '}
-              <code className="bg-surface-secondary px-1 rounded">LLM_PROVIDER=openai</code> and{' '}
-              <code className="bg-surface-secondary px-1 rounded">LLM_HOST</code> environment variables.
+              Point NOMAD at an AI server running elsewhere. Choose the backend type so NOMAD
+              speaks the right protocol — <strong>Ollama</strong> uses its native API (start the
+              remote host with <code className="bg-surface-secondary px-1 rounded">OLLAMA_HOST=0.0.0.0</code>),
+              while <strong>OpenAI-compatible</strong> covers vLLM, llama.cpp, LM Studio and
+              similar servers (the URL usually ends in <code className="bg-surface-secondary px-1 rounded">/v1</code>).
             </p>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-text-primary mb-2">Backend type</label>
+              <div className="flex gap-2">
+                {([
+                  { value: 'ollama' as const, label: 'Ollama' },
+                  { value: 'openai' as const, label: 'OpenAI-compatible' },
+                ]).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      setRemoteProtocol(option.value)
+                      setRemoteOllamaError(null)
+                      // Model management is an Ollama-only capability.
+                      if (option.value === 'openai') setRemoteManagedByNomad(false)
+                    }}
+                    className={`px-3 py-1.5 text-sm rounded-lg border-2 transition-colors cursor-pointer ${
+                      remoteProtocol === option.value
+                        ? 'border-desert-green bg-surface-secondary text-text-primary font-semibold'
+                        : 'border-border-subtle text-text-secondary hover:bg-surface-secondary'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="flex items-end gap-3">
               <div className="flex-1">
                 <Input
                   name="remoteOllamaUrl"
-                  label="Remote Ollama URL"
-                  placeholder="http://192.168.1.100:11434"
+                  label={remoteProtocol === 'openai' ? 'OpenAI-compatible base URL' : 'Remote Ollama URL'}
+                  placeholder={
+                    remoteProtocol === 'openai'
+                      ? 'http://192.168.1.100:8000/v1'
+                      : 'http://192.168.1.100:11434'
+                  }
                   value={remoteOllamaUrl}
                   onChange={(e) => {
                     setRemoteOllamaUrl(e.target.value)
@@ -468,6 +510,30 @@ export default function ModelsPage(props: {
                 </StyledButton>
               )}
             </div>
+
+            {remoteProtocol === 'openai' && (
+              <div className="mt-4 max-w-md">
+                <Input
+                  name="remoteApiKey"
+                  label="API key (optional)"
+                  type="password"
+                  placeholder={props.models.settings.remoteOllamaUrl ? 'Unchanged — type to replace' : 'Most local servers do not require one'}
+                  value={remoteApiKey}
+                  onChange={(e) => setRemoteApiKey(e.target.value)}
+                />
+              </div>
+            )}
+
+            {remoteProtocol === 'ollama' && (
+              <div className="mt-4">
+                <Switch
+                  checked={remoteManagedByNomad}
+                  onChange={setRemoteManagedByNomad}
+                  label="Let NOMAD manage models on this server"
+                  description="Off by default: on a server you share with other people or apps, NOMAD will not pull, delete, or unload models. Turn this on only for an Ollama instance dedicated to NOMAD."
+                />
+              </div>
+            )}
             </>
             )}
           </div>

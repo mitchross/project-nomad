@@ -36,7 +36,23 @@ export const KV_STORE_SCHEMA = {
   'ui.theme':                   'string',
   'ai.assistantCustomName':     'string',
   'gpu.type':                   'string',
+  // Legacy remote-backend URL. Since the protocol-aware settings landed it is
+  // interpreted as "protocol: ollama" — kept as the storage for that case so
+  // existing Docker installs need no migration and provider precedence is
+  // unchanged (env → KV → managed container).
   'ai.remoteOllamaUrl':         'string',
+  // Explicit backend protocol for the KV-configured remote: 'ollama' (native
+  // /api/*) or 'openai' (OpenAI-compatible /v1/*, e.g. vLLM, llama.cpp,
+  // LM Studio). Absent/empty means "no KV-configured remote".
+  'ai.remoteProtocol':          'string',
+  // API key for an OpenAI-compatible remote. Optional — most local servers
+  // ignore it.
+  'ai.remoteApiKey':            'string',
+  // Whether NOMAD is AUTHORIZED to mutate models on the configured backend
+  // (pull/delete, and the chat-path unload sweep). Defaults off for remote
+  // backends: a shared server's models are not ours to change even when the
+  // protocol technically allows it.
+  'ai.remoteManagedByNomad':    'boolean',
   'ai.ollamaFlashAttention':    'boolean',
   'ai.autoThinking':            'boolean',
   'ai.amdGpuAcceleration':      'boolean',

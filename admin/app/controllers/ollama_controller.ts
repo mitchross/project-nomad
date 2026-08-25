@@ -16,10 +16,13 @@ import logger from '@adonisjs/core/services/logger'
 import type { ChatMessage } from '../services/llm/llm_provider.js'
 import { ensureFreshProvider } from '../services/llm/provider_factory.js'
 import {
+  isRemoteProtocol,
   probeNativeOllama,
   probeOpenAICompatible,
   resolveRemoteConfigLock,
+  validateRemoteBackend,
   REMOTE_CONFIG_LOCK_MESSAGES,
+  type RemoteProtocol,
 } from '../services/llm/remote_ollama_config.js'
 import env from '#start/env'
 
@@ -266,14 +269,27 @@ export default class OllamaController {
     if (!remoteUrl) {
       return { configured: false, connected: false }
     }
-    // Same native-Ollama probe configureRemote validates with — status and
-    // Save & Test must never disagree about what a valid backend is.
-    const connected = await probeNativeOllama(remoteUrl, 3000)
-    return { configured: true, connected }
+    // Probe the SAME protocol the backend was configured with, so status and
+    // Save & Test can never disagree about what a valid backend is.
+    const stored = await KVStore.getValue('ai.remoteProtocol')
+    const protocol: RemoteProtocol = isRemoteProtocol(stored) ? stored : 'ollama'
+    const connected =
+      protocol === 'openai'
+        ? await probeOpenAICompatible(remoteUrl, 3000)
+        : await probeNativeOllama(remoteUrl, 3000)
+    return { configured: true, connected, protocol }
   }
 
   async configureRemote({ request, response }: HttpContext) {
     const remoteUrl: string | null = request.input('remoteUrl', null)
+    // Explicit backend protocol (defaults to Ollama — what this field always
+    // meant before protocol selection existed, so old clients keep working).
+    const protocolInput = request.input('protocol', 'ollama')
+    const protocol: RemoteProtocol = isRemoteProtocol(protocolInput) ? protocolInput : 'ollama'
+    const apiKeyInput: string | null = request.input('apiKey', null)
+    // "May NOMAD manage models on this backend?" — defaults OFF: a remote
+    // server may be shared, and its models are not ours to mutate.
+    const managedByNomad: boolean = request.input('managedByNomad', false) === true
 
     const ollamaService = await Service.query().where('service_name', SERVICE_NAMES.OLLAMA).first()
     if (!ollamaService) {
@@ -285,6 +301,9 @@ export default class OllamaController {
     // the service marked installed. Otherwise fall back to uninstalled.
     if (!remoteUrl || remoteUrl.trim() === '') {
       await KVStore.clearValue('ai.remoteOllamaUrl')
+      await KVStore.clearValue('ai.remoteProtocol')
+      await KVStore.clearValue('ai.remoteApiKey')
+      await KVStore.clearValue('ai.remoteManagedByNomad')
       // Docker appliance workflow — no managed containers exist on Kubernetes.
       const hasLocalContainer = DockerService.isKubernetesMode()
         ? false
@@ -337,30 +356,24 @@ export default class OllamaController {
     // passing a generic /v1/models probe here would save successfully and
     // then fail on every real call. Those backends are configured with
     // LLM_PROVIDER=openai + LLM_HOST instead (provider selector UI planned).
-    const nativeOllama = await probeNativeOllama(remoteUrl, 5000)
-
-    if (!nativeOllama) {
-      // Distinguish "OpenAI-compatible but not Ollama" from "unreachable" so
-      // the user gets an actionable message instead of a false connect error.
-      const openAiCompatible = await probeOpenAICompatible(remoteUrl, 5000)
-
-      if (openAiCompatible) {
-        return response.status(400).send({
-          success: false,
-          message:
-            'An OpenAI-compatible server was detected at this URL, but this field configures a remote Ollama instance. ' +
-            'Configure OpenAI-compatible backends (vLLM, llama.cpp, LM Studio, ...) using the LLM_PROVIDER=openai and LLM_HOST environment variables instead.',
-        })
-      }
-
-      return response.status(400).send({
-        success: false,
-        message: `Could not reach an Ollama server at ${remoteUrl}. Make sure Ollama is running, reachable, and started with OLLAMA_HOST=0.0.0.0.`,
-      })
+    // Probe the protocol the user says this server speaks; a mismatch reports
+    // which type to pick instead of a generic connection failure.
+    const validation = await validateRemoteBackend(remoteUrl, protocol)
+    if (!validation.ok) {
+      return response.status(400).send({ success: false, message: validation.message })
     }
 
     // Save remote URL and mark service as installed
     await KVStore.setValue('ai.remoteOllamaUrl', remoteUrl.trim())
+    await KVStore.setValue('ai.remoteProtocol', protocol)
+    if (apiKeyInput && apiKeyInput.trim()) {
+      await KVStore.setValue('ai.remoteApiKey', apiKeyInput.trim())
+    } else {
+      await KVStore.clearValue('ai.remoteApiKey')
+    }
+    // Ownership is only meaningful where NOMAD could technically manage models
+    // (Ollama's native API); OpenAI-compatible backends expose no such API.
+    await KVStore.setValue('ai.remoteManagedByNomad', protocol === 'ollama' ? managedByNomad : false)
     ollamaService.installed = true
     ollamaService.installation_status = 'idle'
     await ollamaService.save()

@@ -28,6 +28,7 @@ function ctx(overrides: Partial<ResolutionContext> = {}): ResolutionContext {
     envValue: () => undefined,
     llmProviderType: 'ollama',
     kvRemoteOllamaUrl: null,
+    kvRemoteManagedByNomad: null,
     dockerStatusFor: () => undefined,
     availabilityFor: () => 'configured',
     ...overrides,
@@ -113,7 +114,8 @@ test.group('ServiceIntegration resolution', () => {
     assert.equal(integration.availability, 'reachable')
     assert.equal(integration.endpoints.apiUrl, 'http://ollama:11434')
     for (const cap of WORKLOAD_CAPS) assert.isFalse(integration.capabilities[cap], cap)
-    // Bundled-dedicated assumption (documented; PR 3 adds the explicit flag).
+    // Bundled-dedicated DEFAULT; an operator can override it explicitly
+    // (see the model-ownership group below).
     assert.equal(integration.modelOwner, 'nomad')
     assert.isTrue(integration.capabilities.canManageModels)
   })
@@ -193,5 +195,71 @@ test.group('ServiceIntegration resolution', () => {
     assert.equal(integration.endpoints.browserUrl, 'https://notes.example.com')
     assert.isTrue(integration.capabilities.canOpen)
     assert.isTrue(integration.capabilities.canStartStop)
+  })
+})
+
+/**
+ * Explicit model-ownership answers (PR 3). Before this, ownership for a
+ * bundled Kubernetes Ollama was a documented ASSUMPTION; the operator can now
+ * state it, and the answer always wins over the defaults.
+ */
+test.group('ServiceIntegration model ownership', () => {
+  test('an explicit hands-off answer disables model management on a bundled K8s Ollama', ({
+    assert,
+  }) => {
+    const integration = resolveIntegration(
+      row({ service_name: SERVICE_NAMES.OLLAMA, installed: true }),
+      ctx({
+        runtimeContext: 'kubernetes',
+        envValue: (name) => (name === 'LLM_HOST' ? 'http://shared-ollama:11434' : undefined),
+        kvRemoteManagedByNomad: false,
+      })
+    )
+    assert.equal(integration.modelOwner, 'external')
+    assert.isFalse(integration.capabilities.canManageModels)
+  })
+
+  test('an explicit opt-in enables model management on a Docker-mode remote Ollama', ({
+    assert,
+  }) => {
+    const integration = resolveIntegration(
+      row({ service_name: SERVICE_NAMES.OLLAMA, installed: true }),
+      ctx({
+        kvRemoteOllamaUrl: 'http://my-own-box:11434',
+        kvRemoteManagedByNomad: true,
+        dockerStatusFor: () => 'running',
+      })
+    )
+    assert.equal(integration.modelOwner, 'nomad')
+    assert.isTrue(integration.capabilities.canManageModels)
+  })
+
+  test('with no explicit answer the documented defaults still apply', ({ assert }) => {
+    // Docker + Settings remote → conservatively external.
+    const dockerRemote = resolveIntegration(
+      row({ service_name: SERVICE_NAMES.OLLAMA, installed: true }),
+      ctx({ kvRemoteOllamaUrl: 'http://box:11434', dockerStatusFor: () => 'running' })
+    )
+    assert.equal(dockerRemote.modelOwner, 'external')
+
+    // K8s bundled component → assumed NOMAD-dedicated.
+    const k8sBundled = resolveIntegration(
+      row({ service_name: SERVICE_NAMES.OLLAMA, installed: true }),
+      ctx({
+        runtimeContext: 'kubernetes',
+        envValue: (name) => (name === 'LLM_HOST' ? 'http://ollama:11434' : undefined),
+      })
+    )
+    assert.equal(k8sBundled.modelOwner, 'nomad')
+  })
+
+  test('the ownership answer does not apply to a purely local managed container', ({ assert }) => {
+    // No remote backend configured: the local container is ours regardless.
+    const integration = resolveIntegration(
+      row({ service_name: SERVICE_NAMES.OLLAMA, installed: true }),
+      ctx({ kvRemoteManagedByNomad: false, dockerStatusFor: () => 'running' })
+    )
+    assert.equal(integration.modelOwner, 'nomad')
+    assert.isTrue(integration.capabilities.canManageModels)
   })
 })

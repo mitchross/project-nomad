@@ -73,6 +73,10 @@ export default await Env.create(new URL('../', import.meta.url), {
   LLM_API_KEY: Env.schema.string.optional(),
   OLLAMA_HOST: Env.schema.string.optional(),
   AI_BENCHMARK_MODEL: Env.schema.string.optional(),
+  // Comma-separated substrings identifying reasoning ("thinking") models on
+  // OpenAI-compatible backends, which expose no capability metadata. Overrides
+  // the built-in list in OpenAIProvider when set.
+  LLM_THINKING_MODELS: Env.schema.string.optional(),
 
   /*
   |----------------------------------------------------------
