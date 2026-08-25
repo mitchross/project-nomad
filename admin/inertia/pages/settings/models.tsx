@@ -26,11 +26,15 @@ export default function ModelsPage(props: {
   models: {
     availableModels: NomadOllamaModel[]
     installedModels: NomadInstalledModel[]
-    settings: { chatSuggestionsEnabled: boolean; aiAssistantCustomName: string; remoteOllamaUrl: string; remoteOllamaLock: 'kubernetes' | 'env' | null; ollamaFlashAttention: boolean; autoThinking: boolean }
+    settings: { chatSuggestionsEnabled: boolean; aiAssistantCustomName: string; remoteOllamaUrl: string; remoteOllamaLock: 'kubernetes' | 'env' | null; canManageModels: boolean; ollamaFlashAttention: boolean; autoThinking: boolean }
   }
 }) {
   const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
   const { isInstalled } = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
+  // Server-resolved: does this deployment's AI backend support model
+  // management AND is NOMAD authorized to mutate it? (Both must hold — a
+  // shared Ollama technically supports pulls but isn't ours to change.)
+  const canManageModels = props.models.settings.canManageModels
   const { addNotification } = useNotifications()
   const { openModal, closeAllModals } = useModals()
   const { debounce } = useDebounce()
@@ -312,6 +316,7 @@ export default function ModelsPage(props: {
                 label="Chat Suggestions"
                 description="Display AI-generated conversation starters in the chat interface"
               />
+              {canManageModels && (
               <Switch
                 checked={ollamaFlashAttention}
                 onChange={(newVal) => {
@@ -321,6 +326,7 @@ export default function ModelsPage(props: {
                 label="Flash Attention"
                 description="Enables OLLAMA_FLASH_ATTENTION=1 for improved memory efficiency. Disable if you experience instability. Takes effect after reinstalling the AI Assistant."
               />
+              )}
               <Switch
                 checked={autoThinking}
                 onChange={(newVal) => {
@@ -347,11 +353,13 @@ export default function ModelsPage(props: {
             </div>
           </div>
 
-          <StyledSectionHeader title="Installed Models" className="mt-12 mb-4" />
+          <StyledSectionHeader title={canManageModels ? 'Installed Models' : 'Available Models'} className="mt-12 mb-4" />
           <div className="bg-surface-primary rounded-lg border-2 border-border-subtle p-6">
             {props.models.installedModels.length === 0 ? (
               <p className="text-text-muted">
-                No models installed. Browse the model catalog below to get started.
+                {canManageModels
+                  ? 'No models installed. Browse the model catalog below to get started.'
+                  : 'No models reported by this AI backend. Models are managed on the backend itself.'}
               </p>
             ) : (
               <table className="min-w-full divide-y divide-border-subtle">
@@ -388,14 +396,16 @@ export default function ModelsPage(props: {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <StyledButton
-                          variant="danger"
-                          size="sm"
-                          onClick={() => confirmDeleteModel(model.name)}
-                          icon="IconTrash"
-                        >
-                          Delete
-                        </StyledButton>
+                        {canManageModels && (
+                          <StyledButton
+                            variant="danger"
+                            size="sm"
+                            onClick={() => confirmDeleteModel(model.name)}
+                            icon="IconTrash"
+                          >
+                            Delete
+                          </StyledButton>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -464,14 +474,21 @@ export default function ModelsPage(props: {
 
           <ActiveModelDownloads withHeader />
 
+          {!canManageModels && (
+            <>
+              <StyledSectionHeader title="Models" className="mt-12 mb-4" />
+              <Alert
+                type="info"
+                variant="bordered"
+                title="Models are managed on your AI backend"
+                message="This deployment uses an AI backend NOMAD does not manage (an OpenAI-compatible server such as vLLM or llama.cpp, or an Ollama instance owned elsewhere). Add or remove models on that server; NOMAD lists what it serves."
+                className="mb-4"
+              />
+            </>
+          )}
+          {canManageModels && (
+          <>
           <StyledSectionHeader title="Models" className="mt-12 mb-4" />
-          <Alert
-            type="info"
-            variant="bordered"
-            title="Model downloading is only supported when using a Ollama backend."
-            message="If you are connected to an OpenAI API host (e.g. LM Studio), please download models directly in that application."
-            className="mb-4"
-          />
           <div className="flex justify-start items-center gap-3 mt-4">
             <Input
               name="search"
@@ -606,6 +623,8 @@ export default function ModelsPage(props: {
               </StyledButton>
             )}
           </div>
+          </>
+          )}
         </main>
       </div>
     </SettingsLayout>

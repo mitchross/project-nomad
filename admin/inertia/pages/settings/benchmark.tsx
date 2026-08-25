@@ -32,9 +32,16 @@ export default function BenchmarkPage(props: {
     latestResult: BenchmarkResult | null
     status: BenchmarkStatus
     currentBenchmarkId: string | null
+    /**
+     * System benchmarks shell out to sysbench in Docker — false where the
+     * cluster owns workloads. Defaults true so older responses behave as
+     * before; the server refuses the run independently either way.
+     */
+    canRunSystemBenchmark?: boolean
   }
 }) {
   const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
+  const canRunSystemBenchmark = props.benchmark.canRunSystemBenchmark ?? true
   const queryClient = useQueryClient()
   // Destructure — the hook returns { isInstalled, loading }; using the whole
   // object as a boolean made `!aiInstalled` always false, so the "AI assistant
@@ -283,10 +290,12 @@ export default function BenchmarkPage(props: {
                     </Alert>
                   )}
                   <p className="text-desert-stone-dark">
-                    Run a benchmark to measure your system's CPU, memory, disk, and AI inference
-                    performance. The benchmark takes approximately 3-6 minutes to complete.
+                    {canRunSystemBenchmark
+                      ? "Run a benchmark to measure your system's CPU, memory, disk, and AI inference performance. The benchmark takes approximately 3-6 minutes to complete."
+                      : 'System benchmarks (CPU, memory, disk) run sysbench in Docker and are unavailable in this deployment, where the cluster owns workloads. The AI benchmark measures your configured AI backend.'}
                   </p>
                   <div className="flex flex-wrap gap-4">
+                    {canRunSystemBenchmark && (
                     <StyledButton
                       onClick={handleFullBenchmarkClick}
                       disabled={runBenchmark.isPending}
@@ -294,6 +303,8 @@ export default function BenchmarkPage(props: {
                     >
                       Run Full Benchmark
                     </StyledButton>
+                    )}
+                    {canRunSystemBenchmark && (
                     <StyledButton
                       variant="secondary"
                       onClick={() => runBenchmark.mutate('system')}
@@ -302,6 +313,7 @@ export default function BenchmarkPage(props: {
                     >
                       System Only
                     </StyledButton>
+                    )}
                     <StyledButton
                       variant="secondary"
                       onClick={() => runBenchmark.mutate('ai')}

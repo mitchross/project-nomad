@@ -42,6 +42,7 @@ import { useTransmit } from 'react-adonis-transmit'
 import { BROADCAST_CHANNELS } from '../../constants/broadcast'
 import { ServiceSlim } from '../../types/services'
 import { getServiceLink } from '~/lib/navigation'
+import { capabilitiesOf, provisionerNotice } from '~/lib/service_capabilities'
 import { getSupplyDepotDocLink } from '../../constants/supply_depot_docs'
 import api from '~/lib/api'
 import { toTitleCase } from '../../app/utils/misc'
@@ -876,6 +877,10 @@ function AppCard({
 }: AppCardProps) {
   const isRunning = service.status === 'running'
   const isStopped = service.installed && !isRunning
+  // Server-resolved capabilities (ServiceIntegrationResolver). Presentation
+  // only — every action is independently enforced server-side.
+  const caps = capabilitiesOf(service)
+  const externalNotice = provisionerNotice(service)
   const catColor = service.category ? CATEGORY_COLORS[service.category] ?? CATEGORY_COLORS.custom : CATEGORY_COLORS.custom
   const isDropdownOpen = openDropdown === service.service_name
   // Port pill: an ui_location may carry an explicit scheme ("https:8480") — show just the port,
@@ -997,7 +1002,16 @@ function AppCard({
             {uiIsHttps ? '🔒 ' : ''}:{uiPort}
           </span>
         )}
-        {service.available_update_version && !service.is_custom && (
+        {service.available_update_version && !service.is_custom && !caps.canUpdateWorkload && (
+          <span
+            title={`Version ${service.available_update_version} is available; updates are managed by your deployment`}
+            className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold bg-surface-secondary text-text-muted"
+          >
+            <IconArrowUp className="h-3 w-3" />
+            {service.available_update_version} available
+          </span>
+        )}
+        {service.available_update_version && !service.is_custom && caps.canUpdateWorkload && (
           <button
             type="button"
             onClick={onUpdateVersion}
@@ -1012,7 +1026,7 @@ function AppCard({
 
       {/* Action buttons */}
       <div className="flex items-center gap-2">
-        {!service.installed && service.installation_status !== 'installing' && (
+        {!service.installed && service.installation_status !== 'installing' && caps.canInstall && (
           <StyledButton
             size="sm"
             variant="primary"
@@ -1022,6 +1036,12 @@ function AppCard({
           >
             Install
           </StyledButton>
+        )}
+
+        {/* Not installable here: the cluster or an external operator owns this
+            workload. Say so instead of offering a button the server refuses. */}
+        {!service.installed && service.installation_status !== 'installing' && !caps.canInstall && (
+          <p className="flex-1 text-xs text-text-muted py-1">{externalNotice ?? 'Not managed by NOMAD in this deployment.'}</p>
         )}
 
         {service.installed ? (
@@ -1060,16 +1080,24 @@ function AppCard({
                       Docs
                     </a>
                   )}
-                  {isStopped && (
+                  {isStopped && caps.canStartStop && (
                     <DropdownItem icon={<IconPlayerPlay className="h-4 w-4" />} label="Start" onClick={onStart} />
                   )}
-                  {isRunning && (
+                  {isRunning && caps.canStartStop && (
                     <DropdownItem icon={<IconPlayerStop className="h-4 w-4" />} label="Stop" onClick={onStop} />
                   )}
-                  <DropdownItem icon={<IconRefresh className="h-4 w-4" />} label="Restart" onClick={onRestart} />
-                  <DropdownItem icon={<IconFileText className="h-4 w-4" />} label="Logs" onClick={onLogs} />
-                  <DropdownItem icon={<IconChartBar className="h-4 w-4" />} label="Stats" onClick={onStats} />
-                  <DropdownItem icon={<IconPencil className="h-4 w-4" />} label="Edit" onClick={onEdit} />
+                  {caps.canRestart && (
+                    <DropdownItem icon={<IconRefresh className="h-4 w-4" />} label="Restart" onClick={onRestart} />
+                  )}
+                  {caps.canViewLogs && (
+                    <DropdownItem icon={<IconFileText className="h-4 w-4" />} label="Logs" onClick={onLogs} />
+                  )}
+                  {caps.canViewStats && (
+                    <DropdownItem icon={<IconChartBar className="h-4 w-4" />} label="Stats" onClick={onStats} />
+                  )}
+                  {caps.canUpdateWorkload && (
+                    <DropdownItem icon={<IconPencil className="h-4 w-4" />} label="Edit" onClick={onEdit} />
+                  )}
                   <DropdownItem icon={<IconWorld className="h-4 w-4" />} label="Set custom URL" onClick={onSetUrl} />
                   {
                     migrationInstructionsHref ? (
@@ -1085,7 +1113,7 @@ function AppCard({
                       </a>
                     ) : (null)
                   }
-                  {!service.is_custom && onToggleAutoUpdate ? (
+                  {!service.is_custom && onToggleAutoUpdate && caps.canUpdateWorkload ? (
                     autoUpdateMasterEnabled ? (
                       <DropdownItem
                         icon={
@@ -1104,21 +1132,30 @@ function AppCard({
                       />
                     )
                   ) : null}
-                  {service.available_update_version && !service.is_custom ? (
+                  {service.available_update_version && !service.is_custom && caps.canUpdateWorkload ? (
                     <DropdownItem
                       icon={<IconArrowUp className="h-4 w-4 text-desert-green" />}
                       label={`Update to ${service.available_update_version}`}
                       onClick={onUpdateVersion}
                     />
                   ) : null}
-                  {service.is_custom ? (
+                  {service.is_custom && caps.canUpdateWorkload ? (
                     <DropdownItem icon={<IconCloudDownload className="h-4 w-4" />} label="Update (pull latest)" onClick={onUpdate} />
                   ) : null}
-                  <DropdownItem icon={<IconRefresh className="h-4 w-4 text-desert-orange" />} label="Force Reinstall" onClick={onReinstall} danger />
-                  {service.is_custom ? (
-                    <DropdownItem icon={<IconTrash className="h-4 w-4 text-desert-red" />} label="Delete" onClick={onDelete} danger />
-                  ) : (
-                    <DropdownItem icon={<IconTrash className="h-4 w-4 text-desert-red" />} label="Uninstall" onClick={onUninstall} danger />
+                  {caps.canInstall && (
+                    <DropdownItem icon={<IconRefresh className="h-4 w-4 text-desert-orange" />} label="Force Reinstall" onClick={onReinstall} danger />
+                  )}
+                  {caps.canUninstall ? (
+                    service.is_custom ? (
+                      <DropdownItem icon={<IconTrash className="h-4 w-4 text-desert-red" />} label="Delete" onClick={onDelete} danger />
+                    ) : (
+                      <DropdownItem icon={<IconTrash className="h-4 w-4 text-desert-red" />} label="Uninstall" onClick={onUninstall} danger />
+                    )
+                  ) : null}
+                  {externalNotice && (
+                    <p className="px-3 py-2 text-[11px] leading-snug text-text-muted border-t border-surface-secondary">
+                      {externalNotice}
+                    </p>
                   )}
                 </div>
               )}
