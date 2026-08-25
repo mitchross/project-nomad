@@ -46,4 +46,9 @@ router.use([
  * Named middleware collection must be explicitly assigned to
  * the routes or the routes group.
  */
-export const middleware = router.named({})
+export const middleware = router.named({
+  // TEMPORARY PR-0 scaffolding: blocks managed-Docker-only operations on
+  // Kubernetes. Replaced by per-service capability enforcement in the
+  // ServiceIntegrationResolver refactor.
+  requireDockerRuntime: () => import('#middleware/require_docker_runtime_middleware'),
+})

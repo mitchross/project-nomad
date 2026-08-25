@@ -15,6 +15,11 @@ export class RunBenchmarkJob {
   }
 
   async handle(job: Job) {
+    // Queue worker process: rebuild the LLM provider if configuration changed
+    // (a controller-side reset cannot reach this process).
+    const { ensureFreshProvider } = await import('#services/llm/provider_factory')
+    await ensureFreshProvider()
+
     const { benchmark_id, benchmark_type } = job.data as RunBenchmarkJobParams
 
     logger.info(`[RunBenchmarkJob] Starting benchmark ${benchmark_id} of type ${benchmark_type}`)

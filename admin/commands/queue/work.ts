@@ -14,6 +14,8 @@ import { AppAutoUpdateJob } from '#jobs/app_auto_update_job'
 import { ContentAutoUpdateJob } from '#jobs/content_auto_update_job'
 import { DownloadDrugDataJob } from '#jobs/download_drug_data_job'
 import { IngestDrugDataJob } from '#jobs/ingest_drug_data_job'
+import { DockerService } from '#services/docker_service'
+import { QueueService } from '#services/queue_service'
 
 export default class QueueWork extends BaseCommand {
   static commandName = 'queue:work'
@@ -147,8 +149,31 @@ export default class QueueWork extends BaseCommand {
     // Schedule nightly update checks (idempotent, will persist over restarts)
     await CheckUpdateJob.scheduleNightly()
     await CheckServiceUpdatesJob.scheduleNightly()
-    await AutoUpdateJob.schedule()
-    await AppAutoUpdateJob.schedule()
+
+    // Core and app auto-update perform Docker workload mutations (image pulls,
+    // container recreation, updater sidecar) that cannot succeed on
+    // Kubernetes, where the cluster/GitOps owns workload lifecycle. Skip
+    // scheduling them there — and remove any scheduler a previous Docker-era
+    // database/Redis carried over, since upsertJobScheduler persists across
+    // restarts. Version discovery (the check jobs above) stays: informational.
+    // Content auto-update also stays — it operates on NOMAD-owned content.
+    if (DockerService.isKubernetesMode()) {
+      const queueService = QueueService.getInstance()
+      for (const [jobClass, schedulerId] of [
+        [AutoUpdateJob, 'hourly-auto-update'],
+        [AppAutoUpdateJob, 'hourly-app-auto-update'],
+      ] as const) {
+        try {
+          await queueService.getQueue(jobClass.queue).removeJobScheduler(schedulerId)
+        } catch {
+          // no stale scheduler to remove
+        }
+      }
+      this.logger.info('Kubernetes mode: core/app auto-update schedulers disabled (workloads are cluster-managed)')
+    } else {
+      await AutoUpdateJob.schedule()
+      await AppAutoUpdateJob.schedule()
+    }
     await ContentAutoUpdateJob.schedule()
 
     // Safety net: log unhandled rejections instead of crashing the worker process.

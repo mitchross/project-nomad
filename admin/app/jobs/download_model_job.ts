@@ -41,6 +41,11 @@ export class DownloadModelJob {
   }
 
   async handle(job: Job) {
+    // Queue worker process: rebuild the LLM provider if configuration changed
+    // (a controller-side reset cannot reach this process).
+    const { ensureFreshProvider } = await import('#services/llm/provider_factory')
+    await ensureFreshProvider()
+
     const { modelName } = job.data as DownloadModelJobParams
 
     logger.info(`[DownloadModelJob] Attempting to download model: ${modelName}`)

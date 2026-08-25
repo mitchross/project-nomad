@@ -14,6 +14,7 @@ import { RAG_CONTEXT_LIMITS, SYSTEM_PROMPTS } from '../../constants/ollama.js'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
 import logger from '@adonisjs/core/services/logger'
 import type { ChatMessage } from '../services/llm/llm_provider.js'
+import { ensureFreshProvider } from '../services/llm/provider_factory.js'
 
 @inject()
 export default class OllamaController {
@@ -281,10 +282,16 @@ export default class OllamaController {
     // the service marked installed. Otherwise fall back to uninstalled.
     if (!remoteUrl || remoteUrl.trim() === '') {
       await KVStore.clearValue('ai.remoteOllamaUrl')
-      const hasLocalContainer = await this._startLocalOllamaContainerIfExists()
+      // Docker appliance workflow — no managed containers exist on Kubernetes.
+      const hasLocalContainer = DockerService.isKubernetesMode()
+        ? false
+        : await this._startLocalOllamaContainerIfExists()
       ollamaService.installed = hasLocalContainer
       ollamaService.installation_status = 'idle'
       await ollamaService.save()
+      // Rebuild this process's provider now that the KV URL changed. The queue
+      // worker process re-checks via ensureFreshProvider() at job start.
+      await ensureFreshProvider()
       return {
         success: true,
         message: hasLocalContainer
@@ -302,21 +309,49 @@ export default class OllamaController {
       })
     }
 
-    // Test connectivity via OpenAI-compatible /v1/models endpoint (works with Ollama, LM Studio, llama.cpp, etc.)
+    // This flow configures a remote OLLAMA instance specifically: everything
+    // downstream (chat, embeddings, model management) speaks Ollama's native
+    // /api/* protocol through OllamaProvider. Validate with an Ollama-native
+    // endpoint — an OpenAI-compatible server (vLLM, llama.cpp, LM Studio)
+    // passing a generic /v1/models probe here would save successfully and
+    // then fail on every real call. Those backends are configured with
+    // LLM_PROVIDER=openai + LLM_HOST instead (provider selector UI planned).
+    const base = remoteUrl.trim().replace(/\/+$/, '')
+    let nativeOllama = false
     try {
-      const testResponse = await fetch(`${remoteUrl.replace(/\/$/, '')}/v1/models`, {
+      const versionResponse = await fetch(`${base}/api/version`, {
         signal: AbortSignal.timeout(5000),
       })
-      if (!testResponse.ok) {
+      nativeOllama = versionResponse.ok
+    } catch {
+      nativeOllama = false
+    }
+
+    if (!nativeOllama) {
+      // Distinguish "OpenAI-compatible but not Ollama" from "unreachable" so
+      // the user gets an actionable message instead of a false connect error.
+      let openAiCompatible = false
+      try {
+        const modelsResponse = await fetch(`${base}/v1/models`, {
+          signal: AbortSignal.timeout(5000),
+        })
+        openAiCompatible = modelsResponse.ok
+      } catch {
+        openAiCompatible = false
+      }
+
+      if (openAiCompatible) {
         return response.status(400).send({
           success: false,
-          message: `Could not connect to ${remoteUrl} (HTTP ${testResponse.status}). Make sure the server is running and accessible. For Ollama, start it with OLLAMA_HOST=0.0.0.0.`,
+          message:
+            'An OpenAI-compatible server was detected at this URL, but this field configures a remote Ollama instance. ' +
+            'Configure OpenAI-compatible backends (vLLM, llama.cpp, LM Studio, ...) using the LLM_PROVIDER=openai and LLM_HOST environment variables instead.',
         })
       }
-    } catch (error) {
+
       return response.status(400).send({
         success: false,
-        message: `Could not connect to ${remoteUrl}. Make sure the server is running and reachable. For Ollama, start it with OLLAMA_HOST=0.0.0.0.`,
+        message: `Could not reach an Ollama server at ${remoteUrl}. Make sure Ollama is running, reachable, and started with OLLAMA_HOST=0.0.0.0.`,
       })
     }
 
@@ -326,16 +361,24 @@ export default class OllamaController {
     ollamaService.installation_status = 'idle'
     await ollamaService.save()
 
-    // Stop the local nomad_ollama container (if running) so it doesn't compete with the
-    // remote host for GPU / port 11434. Preserves the container and its models volume.
-    await this._stopLocalOllamaContainer()
+    // Rebuild this process's provider so the new URL takes effect immediately.
+    // The queue worker process re-checks via ensureFreshProvider() at job start.
+    await ensureFreshProvider()
 
-    // Install Qdrant if not already installed (fire-and-forget)
-    const qdrantService = await Service.query().where('service_name', SERVICE_NAMES.QDRANT).first()
-    if (qdrantService && !qdrantService.installed) {
-      this.dockerService.createContainerPreflight(SERVICE_NAMES.QDRANT).catch((error) => {
-        logger.error('[OllamaController] Failed to start Qdrant preflight:', error)
-      })
+    // Docker appliance workflow — skip on Kubernetes, where no managed
+    // containers exist (the dummy Docker client would just error).
+    if (!DockerService.isKubernetesMode()) {
+      // Stop the local nomad_ollama container (if running) so it doesn't compete with the
+      // remote host for GPU / port 11434. Preserves the container and its models volume.
+      await this._stopLocalOllamaContainer()
+
+      // Install Qdrant if not already installed (fire-and-forget)
+      const qdrantService = await Service.query().where('service_name', SERVICE_NAMES.QDRANT).first()
+      if (qdrantService && !qdrantService.installed) {
+        this.dockerService.createContainerPreflight(SERVICE_NAMES.QDRANT).catch((error) => {
+          logger.error('[OllamaController] Failed to start Qdrant preflight:', error)
+        })
+      }
     }
 
     // Mirror post-install side effects: disable suggestions, trigger docs discovery

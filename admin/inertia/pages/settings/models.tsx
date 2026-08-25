@@ -407,15 +407,18 @@ export default function ModelsPage(props: {
           <StyledSectionHeader title="Remote Connection" className="mt-8 mb-4" />
           <div className="bg-surface-primary rounded-lg border-2 border-border-subtle p-6">
             <p className="text-sm text-text-secondary mb-4">
-              Connect to any OpenAI-compatible API server — Ollama, LM Studio, llama.cpp, and others are all supported.
-              For remote Ollama instances, the host must be started with <code className="bg-surface-secondary px-1 rounded">OLLAMA_HOST=0.0.0.0</code>.
+              Connect to a remote <strong>Ollama</strong> instance running on another machine.
+              The remote host must be started with <code className="bg-surface-secondary px-1 rounded">OLLAMA_HOST=0.0.0.0</code>.
+              OpenAI-compatible servers (vLLM, llama.cpp, LM Studio, ...) are configured differently — via the{' '}
+              <code className="bg-surface-secondary px-1 rounded">LLM_PROVIDER=openai</code> and{' '}
+              <code className="bg-surface-secondary px-1 rounded">LLM_HOST</code> environment variables.
             </p>
             <div className="flex items-end gap-3">
               <div className="flex-1">
                 <Input
                   name="remoteOllamaUrl"
-                  label="Remote Ollama/OpenAI API URL"
-                  placeholder="http://192.168.1.100:11434  (or :1234 for OpenAI API Compatible Apps)"
+                  label="Remote Ollama URL"
+                  placeholder="http://192.168.1.100:11434"
                   value={remoteOllamaUrl}
                   onChange={(e) => {
                     setRemoteOllamaUrl(e.target.value)

@@ -162,6 +162,15 @@ export class CreatorPackService {
       const kiwixUrl = await this.dockerService.getServiceURL(SERVICE_NAMES.KIWIX)
       if (kiwixUrl) return // already installed and resolvable
 
+      // On Kubernetes there is no managed Docker runtime to auto-install Kiwix
+      // into — the Kiwix workload (if any) is deployed by the cluster/GitOps
+      // and serves NOMAD's shared ZIM storage. The pack download itself still
+      // proceeds: content lands in NOMAD-owned storage either way.
+      if (DockerService.isKubernetesMode()) {
+        logger.info('[CreatorPackService] Kubernetes mode: skipping Docker Kiwix auto-install (workload is cluster-managed); pack download proceeds into shared storage')
+        return
+      }
+
       logger.info('[CreatorPackService] Kiwix not installed; auto-installing before pack download')
       const result = await this.dockerService.createContainerPreflight(SERVICE_NAMES.KIWIX)
       if (!result.success) {

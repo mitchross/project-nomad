@@ -36,7 +36,10 @@ export default function BenchmarkPage(props: {
 }) {
   const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
   const queryClient = useQueryClient()
-  const aiInstalled = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
+  // Destructure — the hook returns { isInstalled, loading }; using the whole
+  // object as a boolean made `!aiInstalled` always false, so the "AI assistant
+  // required" alert could never fire.
+  const { isInstalled: aiInstalled } = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
   const [isRunning, setIsRunning] = useState(props.benchmark.status !== 'idle')
   const [revealing, setRevealing] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
