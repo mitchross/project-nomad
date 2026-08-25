@@ -26,6 +26,7 @@ import CollectionUpdatesController from '#controllers/collection_updates_control
 import CreatorPacksController from '#controllers/creator_packs_controller'
 import ZimController from '#controllers/zim_controller'
 import router from '@adonisjs/core/services/router'
+import { middleware } from '#start/kernel'
 import transmit from '@adonisjs/transmit/services/main'
 import { documented } from '#start/openapi/documented'
 import {
@@ -548,7 +549,7 @@ router
       tags: ['system'],
       request: installServiceValidator,
     })
-    documented(router.post('/services/uninstall', [SystemController, 'uninstallService']), {
+    documented(router.post('/services/uninstall', [SystemController, 'uninstallService']).use(middleware.requireDockerRuntime()), {
       summary: 'Uninstall a service',
       tags: ['system'],
       request: uninstallServiceValidator,
@@ -557,7 +558,7 @@ router
       summary: 'Check for service updates',
       tags: ['system'],
     })
-    documented(router.get('/services/preflight', [SystemController, 'preflightCheck']), {
+    documented(router.get('/services/preflight', [SystemController, 'preflightCheck']).use(middleware.requireDockerRuntime()), {
       summary: 'Preflight a service install',
       tags: ['system'],
       query: preflightValidator,
@@ -566,27 +567,27 @@ router
       summary: 'Suggest an available custom port',
       tags: ['system'],
     })
-    documented(router.post('/services/preflight-custom', [SystemController, 'preflightCustomApp']), {
+    documented(router.post('/services/preflight-custom', [SystemController, 'preflightCustomApp']).use(middleware.requireDockerRuntime()), {
       summary: 'Preflight a custom app install',
       tags: ['system'],
       request: preflightCustomValidator,
     })
-    documented(router.post('/services/custom', [SystemController, 'createCustomApp']), {
+    documented(router.post('/services/custom', [SystemController, 'createCustomApp']).use(middleware.requireDockerRuntime()), {
       summary: 'Create a custom app',
       tags: ['system'],
       request: customAppValidator,
     })
-    documented(router.put('/services/custom', [SystemController, 'updateCustomApp']), {
+    documented(router.put('/services/custom', [SystemController, 'updateCustomApp']).use(middleware.requireDockerRuntime()), {
       summary: 'Update a custom app',
       tags: ['system'],
       request: updateCustomAppValidator,
     })
-    documented(router.post('/services/custom/update', [SystemController, 'updateCustomApp_pullLatest']), {
+    documented(router.post('/services/custom/update', [SystemController, 'updateCustomApp_pullLatest']).use(middleware.requireDockerRuntime()), {
       summary: 'Pull the latest version of a custom app',
       tags: ['system'],
       request: installServiceValidator,
     })
-    documented(router.delete('/services/custom', [SystemController, 'deleteCustomApp']), {
+    documented(router.delete('/services/custom', [SystemController, 'deleteCustomApp']).use(middleware.requireDockerRuntime()), {
       summary: 'Delete a custom app',
       tags: ['system'],
       request: deleteCustomAppValidator,
@@ -600,12 +601,12 @@ router
       tags: ['system'],
       request: setServiceCustomUrlValidator,
     })
-    documented(router.get('/services/:name/logs', [SystemController, 'getServiceLogs']), {
+    documented(router.get('/services/:name/logs', [SystemController, 'getServiceLogs']).use(middleware.requireDockerRuntime()), {
       summary: 'Get service logs',
       tags: ['system'],
       query: serviceLogsValidator,
     })
-    documented(router.get('/services/:name/stats', [SystemController, 'getServiceStats']), {
+    documented(router.get('/services/:name/stats', [SystemController, 'getServiceStats']).use(middleware.requireDockerRuntime()), {
       summary: 'Get service stats',
       tags: ['system'],
     })

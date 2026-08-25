@@ -23,3 +23,35 @@ jobs:
       - name: Run build
         run: npm run build
         working-directory: ./admin
+
+      # Focused, deterministic unit specs only — hermetic: no database or
+      # Redis required (config/transmit.ts uses the in-memory transport for
+      # NODE_ENV=test, and nothing here touches BullMQ queues). If future
+      # specs exercise queues, add a redis service container to this job.
+      # Running the complete unit/functional suite in CI needs provisioned
+      # MySQL + fixtures and is tracked as a follow-up.
+      - name: Run focused unit tests
+        run: >-
+          node ace test
+          --files k8s_service_env_mapping
+          --files llm_provider_fingerprint
+          --files require_docker_runtime
+          --files remote_ollama_config
+          --force-exit
+        working-directory: ./admin
+        env:
+          NODE_ENV: test
+          PORT: '8080'
+          APP_KEY: ci-focused-unit-tests-0123456789
+          HOST: 0.0.0.0
+          URL: http://localhost:8080
+          LOG_LEVEL: error
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_USER: nomad_user
+          DB_PASSWORD: ci-only
+          DB_DATABASE: nomad
+          DB_NAME: nomad
+          DB_SSL: 'false'
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: '6379'

@@ -24,6 +24,15 @@ export class AppAutoUpdateJob {
   }
 
   async handle(_job: Job) {
+    // Defense in depth: scheduling is skipped/removed on Kubernetes (see
+    // commands/queue/work.ts), but a stale persisted scheduler could still
+    // fire once before removal — app updates are Docker workload mutations
+    // the cluster owns there.
+    if (DockerService.isKubernetesMode()) {
+      logger.info('[AppAutoUpdateJob] Kubernetes mode: app workload updates are cluster-managed; skipping')
+      return { updated: 0, reason: 'kubernetes mode — workloads are cluster-managed' }
+    }
+
     logger.info('[AppAutoUpdateJob] Evaluating app auto-updates...')
 
     const dockerService = new DockerService()

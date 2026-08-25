@@ -21,7 +21,10 @@ export default function AppLayout({
   compact?: boolean
 }) {
   const [isChatOpen, setIsChatOpen] = useState(false)
-  const aiAssistantInstalled = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
+  // Destructure — the hook returns { isInstalled, loading }; using the whole
+  // object as a boolean made this check always-true (the chat button rendered
+  // even with no AI assistant installed).
+  const { isInstalled: aiAssistantInstalled } = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
 
   return (
     <div className="min-h-screen flex flex-col">

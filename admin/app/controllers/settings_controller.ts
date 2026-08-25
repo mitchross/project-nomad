@@ -7,6 +7,8 @@ import { getSettingSchema, updateSettingSchema, validateSettingValue } from '#va
 import { inject } from '@adonisjs/core'
 import type { HttpContext } from '@adonisjs/core/http'
 import env from '#start/env'
+import { DockerService } from '#services/docker_service'
+import { resolveRemoteConfigLock } from '../services/llm/remote_ollama_config.js'
 
 @inject()
 export default class SettingsController {
@@ -81,6 +83,16 @@ export default class SettingsController {
     const chatSuggestionsEnabled = await KVStore.getValue('chat.suggestionsEnabled')
     const aiAssistantCustomName = await KVStore.getValue('ai.assistantCustomName')
     const remoteOllamaUrl = await KVStore.getValue('ai.remoteOllamaUrl')
+    // Who owns AI backend selection — the Settings Remote Ollama flow is only
+    // live for the Docker/Compose appliance; Kubernetes/BYO configure the
+    // backend declaratively (env/Kustomize). Server-side enforcement lives in
+    // OllamaController.configureRemote; this powers the matching UI state.
+    const remoteOllamaLock = resolveRemoteConfigLock({
+      kubernetesMode: DockerService.isKubernetesMode(),
+      llmProvider: env.get('LLM_PROVIDER'),
+      llmHost: env.get('LLM_HOST'),
+      ollamaHost: env.get('OLLAMA_HOST'),
+    })
     const ollamaFlashAttention = await KVStore.getValue('ai.ollamaFlashAttention')
     const autoThinking = await KVStore.getValue('ai.autoThinking')
     return inertia.render('settings/models', {
@@ -91,6 +103,7 @@ export default class SettingsController {
           chatSuggestionsEnabled: chatSuggestionsEnabled ?? false,
           aiAssistantCustomName: aiAssistantCustomName ?? '',
           remoteOllamaUrl: remoteOllamaUrl ?? '',
+          remoteOllamaLock,
           ollamaFlashAttention: ollamaFlashAttention ?? true,
           autoThinking: autoThinking ?? false,
         },

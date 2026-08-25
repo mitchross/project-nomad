@@ -30,16 +30,17 @@ const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 hours
  */
 @inject()
 export class OllamaService {
-  private _provider: LLMProvider | null = null
-
   constructor() { }
 
-  /** Lazily creates the LLM provider singleton */
+  /**
+   * Delegates to the factory's process-wide singleton (no per-instance
+   * caching): when the factory rebuilds the provider after a configuration
+   * change, every OllamaService instance in this process picks it up on the
+   * next access. Entry points that may run after a runtime config change
+   * (queue jobs, remote-config save) call ensureFreshProvider() first.
+   */
   public get provider(): LLMProvider {
-    if (!this._provider) {
-      this._provider = createLLMProvider()
-    }
-    return this._provider
+    return createLLMProvider()
   }
 
   /**

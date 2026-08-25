@@ -28,6 +28,10 @@ export class OllamaProvider implements LLMProvider {
   // Raw base URL (no trailing slash) for the Ollama-native endpoints the SDK
   // doesn't wrap (/api/ps, /api/generate). Captured during _initialize().
   private resolvedHost: string | null = null
+  // How the host was resolved. Runtime-state mutations (model eviction) are
+  // only safe against the NOMAD-managed local container — a remote endpoint
+  // (env- or Settings-configured) may be shared with other users/apps.
+  private hostSource: 'env' | 'remote-config' | 'managed-container' | null = null
 
   private async _initialize() {
     if (!this.initPromise) {
@@ -36,6 +40,19 @@ export class OllamaProvider implements LLMProvider {
         if (host) {
           this.resolvedHost = host.replace(/\/+$/, '')
           this.ollama = new Ollama({ host })
+          this.hostSource = 'env'
+          return
+        }
+
+        // Settings-configured remote URL takes precedence over container
+        // discovery — same order getServiceURL applies, resolved explicitly
+        // here so the source (shared remote vs managed container) is known.
+        const { default: KVStore } = await import('#models/kv_store')
+        const remoteUrl = await KVStore.getValue('ai.remoteOllamaUrl')
+        if (remoteUrl) {
+          this.resolvedHost = remoteUrl.replace(/\/+$/, '')
+          this.ollama = new Ollama({ host: remoteUrl })
+          this.hostSource = 'remote-config'
           return
         }
 
@@ -47,6 +64,7 @@ export class OllamaProvider implements LLMProvider {
         }
         this.resolvedHost = url.replace(/\/+$/, '')
         this.ollama = new Ollama({ host: url })
+        this.hostSource = 'managed-container'
       })().catch((err) => {
         // Reset so the next call retries instead of returning the failed promise forever
         this.initPromise = null
@@ -277,6 +295,19 @@ export class OllamaProvider implements LLMProvider {
     try {
       await this._ensureClient()
       if (!this.resolvedHost) return []
+
+      // TEMPORARY ownership rule (until per-service ownership capabilities
+      // exist): eviction mutates the backend's runtime state, and a remote
+      // Ollama (env- or Settings-configured) may be shared — unloading here
+      // would evict models other users/apps have loaded, triggered by nothing
+      // more than someone opening NOMAD's chat page. Only the NOMAD-managed
+      // local container is unambiguously ours to sweep.
+      if (this.hostSource !== 'managed-container') {
+        logger.debug(
+          `[OllamaProvider] Skipping model unload sweep for ${this.hostSource} Ollama endpoint (not NOMAD-managed)`
+        )
+        return []
+      }
       const response = await axios.get(`${this.resolvedHost}/api/ps`, { timeout: 5000 })
       loadedModels = (response.data?.models ?? [])
         .map((m: { name?: string }) => m.name)

@@ -90,6 +90,12 @@ users' browsers (your ingress hostnames) — not `*.svc.cluster.local`.
   Currently the six services above are the ones the admin recognizes via env.
 - **Maps:** PMTiles are downloaded via the UI onto the admin's storage volume
   and served by the admin itself — no separate map server pod is needed.
+- **Why `replicas: 1` for the admin:** `nomad-admin` is currently tested and
+  supported as a single replica. Its HTTP server, BullMQ worker, scheduler
+  registration, migrations, and startup lifecycle have not yet been audited
+  for active-active operation. Keep `replicas: 1` until multi-replica
+  behavior and leader/scheduler semantics are explicitly validated;
+  HA/leader-election is deliberately out of scope for now.
 - **vLLM users:** enable `components/external-llm` instead of `ollama`, and
   set `EMBEDDING_MODEL`/`EMBEDDING_DIMENSIONS` to match what your server
   actually serves. Model install/delete from the NOMAD UI is unavailable in

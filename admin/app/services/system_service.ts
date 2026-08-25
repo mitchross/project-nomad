@@ -23,6 +23,7 @@ import { KV_STORE_SCHEMA, KVStoreKey } from '../../types/kv_store.js'
 import { isNewerVersion } from '../utils/version.js'
 import { invalidateAssistantNameCache } from '../../config/inertia.js'
 import { KiwixLibraryService } from '#services/kiwix_library_service'
+import { K8S_SERVICE_URL_ENV_VARS } from '../utils/k8s_service_env.js'
 
 @inject()
 export class SystemService {
@@ -1021,21 +1022,21 @@ export class SystemService {
    * The LLM provider (Ollama/llama-cpp) is detected via LLM_HOST or OLLAMA_HOST.
    */
   private async _syncServicesForKubernetes(): Promise<{ service_name: string; status: string }[]> {
-    // Map service names to the env var that indicates they're deployed.
-    // Services with `uiUrl` set will have their ui_location updated to that URL
-    // so the frontend can link to them. Services without `uiUrl` (like Ollama and
-    // Qdrant) keep their seeder-defined ui_location (e.g. '/chat') because their
-    // env vars are internal API endpoints, not browser-facing URLs.
-    const serviceEnvMap: Record<string, { envVar: string; uiUrl?: string }> = {
+    // Which env vars announce each service is deployed: single source of truth
+    // shared with DockerService.getServiceURL() — see app/utils/k8s_service_env.ts
+    // (KOLIBRI_URL deliberately targets the Gen 2 catalog entry there).
+    //
+    // Services with a `uiUrl` override get their ui_location updated so the
+    // frontend can link to them. Services without one (Ollama, Qdrant) keep
+    // their seeder-defined ui_location (e.g. '/chat') because their env vars
+    // are internal API endpoints, not browser-facing URLs.
+    const uiUrlOverrides: Record<string, string | undefined> = {
       // Kiwix: link to NOMAD's Content Explorer (all categories: Wikipedia, medicine,
       // survival, etc.) rather than the raw Kiwix server which only shows loaded ZIMs.
-      [SERVICE_NAMES.KIWIX]: { envVar: 'KIWIX_URL', uiUrl: '/settings/zim/remote-explorer' },
-      // Kolibri: link to NOMAD's Content Explorer for education content
-      [SERVICE_NAMES.KOLIBRI]: { envVar: 'KOLIBRI_URL', uiUrl: env.get('KOLIBRI_URL') },
-      [SERVICE_NAMES.CYBERCHEF]: { envVar: 'CYBERCHEF_URL', uiUrl: env.get('CYBERCHEF_URL') },
-      [SERVICE_NAMES.FLATNOTES]: { envVar: 'FLATNOTES_URL', uiUrl: env.get('FLATNOTES_URL') },
-      [SERVICE_NAMES.QDRANT]: { envVar: 'QDRANT_HOST' },
-      [SERVICE_NAMES.OLLAMA]: { envVar: 'LLM_HOST' },
+      [SERVICE_NAMES.KIWIX]: '/settings/zim/remote-explorer',
+      [SERVICE_NAMES.KOLIBRI_GEN2]: env.get('KOLIBRI_URL'),
+      [SERVICE_NAMES.CYBERCHEF]: env.get('CYBERCHEF_URL'),
+      [SERVICE_NAMES.FLATNOTES]: env.get('FLATNOTES_URL'),
     }
 
     const statuses: { service_name: string; status: string }[] = []
@@ -1043,25 +1044,38 @@ export class SystemService {
       const allServices = await Service.all()
 
       for (const service of allServices) {
-        const config = serviceEnvMap[service.service_name]
-        if (!config) continue
+        // One-time repair: earlier Kubernetes builds mapped KOLIBRI_URL to the
+        // deprecated legacy nomad_kolibri row and marked it installed. In
+        // Kubernetes there is no Docker container behind that row, so an
+        // installed legacy row here can only be that stale mapping — unmark it.
+        // (Docker-mode legacy installs are untouched: this sync only runs in
+        // Kubernetes mode.)
+        if (service.service_name === SERVICE_NAMES.KOLIBRI && service.installed) {
+          logger.info('K8s mode: unmarking stale legacy nomad_kolibri row (KOLIBRI_URL now maps to Gen 2)')
+          service.installed = false
+          service.installation_status = 'idle'
+          await service.save()
+          continue
+        }
 
-        // For Ollama/LLM, also check OLLAMA_HOST as a fallback
-        const isAvailable = !!process.env[config.envVar] ||
-          (service.service_name === SERVICE_NAMES.OLLAMA && !!process.env.OLLAMA_HOST)
+        const envVars = K8S_SERVICE_URL_ENV_VARS[service.service_name]
+        if (!envVars) continue
+
+        const isAvailable = envVars.some((envVar) => !!process.env[envVar])
+        const uiUrl = uiUrlOverrides[service.service_name]
 
         let changed = false
 
         if (isAvailable && !service.installed) {
           logger.info(
-            `K8s mode: marking ${service.service_name} as installed (${config.envVar} is set)`
+            `K8s mode: marking ${service.service_name} as installed (${envVars.join('/')} is set)`
           )
           service.installed = true
           service.installation_status = 'idle'
           changed = true
         } else if (!isAvailable && service.installed) {
           logger.info(
-            `K8s mode: marking ${service.service_name} as not installed (${config.envVar} is not set)`
+            `K8s mode: marking ${service.service_name} as not installed (${envVars.join('/')} is not set)`
           )
           service.installed = false
           service.installation_status = 'idle'
@@ -1069,11 +1083,11 @@ export class SystemService {
         }
 
         // Only update ui_location for browser-facing companion services
-        if (isAvailable && config.uiUrl && service.ui_location !== config.uiUrl) {
+        if (isAvailable && uiUrl && service.ui_location !== uiUrl) {
           logger.info(
-            `K8s mode: updating ${service.service_name} ui_location to ${config.uiUrl}`
+            `K8s mode: updating ${service.service_name} ui_location to ${uiUrl}`
           )
-          service.ui_location = config.uiUrl
+          service.ui_location = uiUrl
           changed = true
         }
 

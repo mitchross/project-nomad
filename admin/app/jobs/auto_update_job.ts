@@ -25,6 +25,15 @@ export class AutoUpdateJob {
   }
 
   async handle(_job: Job) {
+    // Defense in depth: scheduling is skipped/removed on Kubernetes (see
+    // commands/queue/work.ts), but a stale persisted scheduler could still
+    // fire once before removal — core updates need the Docker updater sidecar,
+    // which does not exist there.
+    if (DockerService.isKubernetesMode()) {
+      logger.info('[AutoUpdateJob] Kubernetes mode: core updates are image-tag bumps managed by the cluster; skipping')
+      return { updated: false, reason: 'kubernetes mode — core updates are cluster-managed' }
+    }
+
     logger.info('[AutoUpdateJob] Evaluating auto-update...')
 
     const dockerService = new DockerService()

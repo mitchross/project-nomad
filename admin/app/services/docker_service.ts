@@ -26,6 +26,7 @@ import { randomBytes } from 'node:crypto'
 import KVStore from '#models/kv_store'
 import { BROADCAST_CHANNELS } from '../../constants/broadcast.js'
 import { KIWIX_LIBRARY_CMD } from '../../constants/kiwix.js'
+import { K8S_SERVICE_URL_ENV_VARS } from '../utils/k8s_service_env.js'
 
 @inject()
 export class DockerService {
@@ -260,15 +261,9 @@ export class DockerService {
     // The database doesn't store K8s service endpoints — only Docker container_config
     // and port-based ui_location work in Docker mode.
     if (DockerService.isKubernetesMode()) {
-      const k8sEnvMap: Record<string, string[]> = {
-        [SERVICE_NAMES.OLLAMA]: ['LLM_HOST', 'OLLAMA_HOST'],
-        [SERVICE_NAMES.QDRANT]: ['QDRANT_HOST'],
-        [SERVICE_NAMES.KIWIX]: ['KIWIX_URL'],
-        [SERVICE_NAMES.CYBERCHEF]: ['CYBERCHEF_URL'],
-        [SERVICE_NAMES.FLATNOTES]: ['FLATNOTES_URL'],
-        [SERVICE_NAMES.KOLIBRI]: ['KOLIBRI_URL'],
-      }
-      const envVars = k8sEnvMap[serviceName]
+      // Shared with SystemService._syncServicesForKubernetes — see
+      // app/utils/k8s_service_env.ts for the mapping and its invariants.
+      const envVars = K8S_SERVICE_URL_ENV_VARS[serviceName]
       if (envVars) {
         for (const envVar of envVars) {
           const url = process.env[envVar]

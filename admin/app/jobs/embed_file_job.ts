@@ -58,6 +58,12 @@ export class EmbedFileJob {
   }
 
   async handle(job: Job) {
+    // This runs in the queue worker process — a separate process from the HTTP
+    // server, so a controller-side provider reset can never reach us. Rebuild
+    // the LLM provider here if its configuration changed since it was built.
+    const { ensureFreshProvider } = await import('#services/llm/provider_factory')
+    await ensureFreshProvider()
+
     const { filePath, fileName, batchOffset, totalArticles, collection } = job.data as EmbedFileJobParams
 
     // Only the direct KB-upload controller passes `collection` on dispatch; the other
