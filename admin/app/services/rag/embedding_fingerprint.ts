@@ -1,27 +1,19 @@
 import { createHash } from 'node:crypto'
 
-/**
- * Embedding collection identity (PR 4 of the Kubernetes/BYO sequence).
- *
- * A Qdrant collection is only meaningful together with the embedding
- * configuration that produced its vectors. Qdrant itself validates just the
- * vector SIZE, so two genuinely incompatible configurations at the same
- * dimension — nomic-embed-text vs bge, or a change of task prefix — are
- * accepted silently and mixed into one vector space. Nothing errors; retrieval
- * quality simply degrades, which is the worst possible failure mode.
- *
- * The fingerprint captures everything that materially defines the vector
- * space. Credentials are never part of it: rotating an API key does not change
- * the embeddings.
- */
+// A Qdrant collection only means something alongside the embedding config that
+// produced its vectors, but Qdrant validates the vector SIZE alone: swap
+// nomic-embed-text for another 768-dim model, or change a task prefix, and the
+// incompatible vectors are accepted into the same space. Nothing errors —
+// retrieval quality just degrades. The fingerprint below covers everything that
+// defines that space. Credentials are excluded: rotating a key doesn't change
+// the embeddings.
 
 export interface EmbeddingIdentity {
   /** 'ollama' | 'openai' — different servers, different implementations. */
   providerKind: string
   /**
-   * Endpoint identity, normalized (scheme + host + port + path, no
-   * credentials, no trailing slash). Empty when NOMAD's managed local
-   * container serves embeddings — its identity is stable by definition.
+   * Normalized endpoint (scheme + host + port + path). Empty when the managed
+   * local container serves embeddings — its identity is stable by definition.
    */
   endpoint: string
   model: string
@@ -30,11 +22,8 @@ export interface EmbeddingIdentity {
   queryPrefix: string
 }
 
-/**
- * Upstream's shipped defaults. A collection created by any stock NOMAD before
- * fingerprinting existed has exactly this identity, which is what makes silent
- * adoption safe for the overwhelmingly common case.
- */
+// Stock defaults: any collection built before fingerprinting existed has this
+// identity, which is what makes silent adoption safe for the common case.
 export const LEGACY_DEFAULT_IDENTITY: Omit<EmbeddingIdentity, 'endpoint' | 'providerKind'> = {
   model: 'nomic-embed-text:v1.5',
   dimensions: 768,
@@ -43,15 +32,13 @@ export const LEGACY_DEFAULT_IDENTITY: Omit<EmbeddingIdentity, 'endpoint' | 'prov
 }
 
 /**
- * Normalize an endpoint for identity purposes: strip credentials, default
- * ports, and trailing slashes so cosmetic URL differences don't read as a
- * different vector space. Returns '' for empty input (managed container).
+ * Strip credentials and trailing slashes so cosmetic URL differences don't read
+ * as a different vector space. '' for empty input (managed container).
  */
 export function normalizeEndpoint(raw: string | null | undefined): string {
   if (!raw || !raw.trim()) return ''
-  // Only parse as a URL when it actually carries an http(s) scheme. `new URL`
-  // happily reads a bare "host:11434" as scheme "host:", which would produce a
-  // nonsense identity — the conservative fallback below is correct for those.
+  // Only parse when there's a real http(s) scheme: `new URL` reads a bare
+  // "host:11434" as scheme "host:", giving a nonsense identity.
   if (!/^https?:\/\//i.test(raw.trim())) {
     return raw.trim().replace(/\/+$/, '').toLowerCase()
   }
@@ -69,11 +56,7 @@ export function normalizeEndpoint(raw: string | null | undefined): string {
   }
 }
 
-/**
- * Stable fingerprint of an embedding identity. Prefixes are included verbatim
- * (including trailing spaces, which are semantically significant to nomic) and
- * hashed, so the stored value stays short and opaque.
- */
+// Prefixes are hashed verbatim — trailing spaces are significant to nomic.
 export function computeEmbeddingFingerprint(identity: EmbeddingIdentity): string {
   const canonical = JSON.stringify({
     p: identity.providerKind,
@@ -96,12 +79,8 @@ export function isLegacyDefaultIdentity(identity: EmbeddingIdentity): boolean {
   )
 }
 
-/**
- * Raised when a collection's embedding identity does not match the running
- * configuration. Deliberately fatal for the operation: continuing would either
- * error inside Qdrant (dimension change) or silently poison retrieval quality
- * (same dimension, different model/prefix).
- */
+// Fatal for the operation by design: continuing either errors inside Qdrant
+// (dimension change) or silently poisons retrieval (same dimension, new model).
 export class EmbeddingIdentityMismatchError extends Error {
   readonly collectionName: string
   readonly reason: 'dimensions' | 'identity'

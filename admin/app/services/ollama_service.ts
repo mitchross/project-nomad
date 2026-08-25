@@ -20,40 +20,24 @@ const NOMAD_MODELS_API_PATH = '/api/v1/ollama/models'
 const MODELS_CACHE_FILE = path.join(process.cwd(), 'storage', 'ollama-models-cache.json')
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 hours
 
-/**
- * Despite the name, this is a thin facade over LLMProvider — it can serve
- * either Ollama or any OpenAI-compatible backend (e.g. llama-cpp), depending
- * on LLM_PROVIDER. The class name is kept for now to avoid touching every
- * consumer; rename to LLMService if the indirection ever bites.
- *
- * Actual Ollama-vs-OpenAI behavior lives in admin/app/services/llm/*.
- */
+// Facade over LLMProvider — serves Ollama or any OpenAI-compatible backend per
+// LLM_PROVIDER. Backend-specific behavior lives in app/services/llm/*.
 @inject()
 export class OllamaService {
   constructor() { }
 
-  /**
-   * Delegates to the factory's process-wide singleton (no per-instance
-   * caching): when the factory rebuilds the provider after a configuration
-   * change, every OllamaService instance in this process picks it up on the
-   * next access. Entry points that may run after a runtime config change
-   * (queue jobs, remote-config save) call ensureFreshProvider() first.
-   */
+  // Factory singleton, never cached per-instance, so a rebuild after a config
+  // change is picked up here on next access. Entry points that can run after
+  // such a change call ensureFreshProvider() first.
   public get provider(): LLMProvider {
     return createLLMProvider()
   }
 
   /**
-   * Whether ANY embedding backend is configured for this deployment. The single
-   * source of truth for "should content be queued for KB embedding?" — used by
-   * every dispatch site so the answer can't drift between them.
-   *
-   * True when any of these deployment shapes is present:
-   *  - a dedicated embedding service (EMBEDDING_HOST)
-   *  - an env-configured LLM backend: OpenAI-compatible (vLLM/llama.cpp) or a
-   *    remote/K8s Ollama (LLM_HOST / OLLAMA_HOST)
-   *  - Docker mode: a UI-configured remote Ollama URL or a local Ollama
-   *    container (both resolved by getServiceURL)
+   * Whether any embedding backend is configured — EMBEDDING_HOST, an env LLM
+   * backend (LLM_HOST/OLLAMA_HOST), or a Docker-discovered/UI-configured
+   * Ollama. Single source of truth for "queue this content for embedding?",
+   * so the answer can't drift between dispatch sites.
    */
   public static async isEmbeddingBackendConfigured(dockerService: DockerService): Promise<boolean> {
     if (env.get('EMBEDDING_HOST') || env.get('LLM_HOST') || env.get('OLLAMA_HOST')) {
@@ -63,9 +47,8 @@ export class OllamaService {
   }
 
   /**
-   * Downloads a model with progress tracking. Only works with providers that
-   * support model management (Ollama). For OpenAI-compatible providers, returns
-   * a message indicating that model management is not supported.
+   * Downloads a model with progress tracking. Ollama only — OpenAI-compatible
+   * providers return a "not supported" message.
    */
   async downloadModel(
     model: string,

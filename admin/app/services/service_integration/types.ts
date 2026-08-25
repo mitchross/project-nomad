@@ -1,30 +1,21 @@
-/**
- * Per-service integration descriptors (PR 1 of the Kubernetes/BYO sequence —
- * see docs/CODEX_K8S_BYO_ARCHITECTURE_REVIEW.md §6).
- *
- * A descriptor answers, for one service in THIS deployment:
- *   who provisions the workload? · who owns its models/content? · is it
- *   configured/reachable? · which endpoints exist? · what is NOMAD allowed
- *   to do with it?
- *
- * Descriptors are COMPUTED — resolved from catalog/DB state, runtime context,
- * env/KV configuration, Docker container state, and cached health probes.
- * Nothing here is persisted; `Service.installed` keeps its upstream
- * Docker-artifact meaning as a compatibility shim until every server-side
- * reader consumes descriptors instead.
- */
+// Per-service integration descriptors: for one service in THIS deployment, who
+// provisions the workload, who owns its models/content, whether it's reachable,
+// and what NOMAD is allowed to do with it.
+//
+// Descriptors are computed from catalog/DB state, runtime context, env/KV config,
+// container state and cached probes — never persisted. `Service.installed` keeps
+// its upstream Docker-artifact meaning until every reader consumes descriptors.
 
 /** Where the NOMAD admin itself is running. */
 export type RuntimeContext = 'docker' | 'kubernetes'
 
 /**
- * Who provisions (creates/updates/destroys) the service's workload.
+ * Who creates/updates/destroys the service's workload.
  * - 'nomad-docker': NOMAD's managed Docker appliance owns the container.
- * - 'gitops': the Kubernetes cluster owns the workload (deployed via
- *   Kustomize/Argo/Flux); NOMAD only consumes its endpoint.
- * - 'external': a workload NOMAD knows only by URL (remote Ollama box, BYO
- *   server); nobody in this deployment provisions it on NOMAD's behalf.
- * - 'none': not deployed/configured at all in this runtime.
+ * - 'gitops': the cluster owns it (Kustomize/Argo/Flux); NOMAD only consumes
+ *   its endpoint.
+ * - 'external': known only by URL (remote Ollama box, BYO server).
+ * - 'none': not deployed or configured in this runtime.
  */
 export type WorkloadProvisioner = 'nomad-docker' | 'gitops' | 'external' | 'none'
 
@@ -32,11 +23,11 @@ export type WorkloadProvisioner = 'nomad-docker' | 'gitops' | 'external' | 'none
 export type ResourceOwner = 'nomad' | 'external' | 'none'
 
 /**
- * Observed availability. NEVER derived from configuration alone:
+ * Observed availability — never derived from configuration alone.
  * - 'disabled': not configured/installed in this runtime.
- * - 'configured': configuration exists; no probe result (yet).
+ * - 'configured': configuration exists, no probe result yet.
  * - 'reachable' / 'unhealthy': a probe or container state said so.
- * - 'unknown': no probe is applicable/possible for this integration.
+ * - 'unknown': no probe applies to this integration.
  */
 export type Availability = 'disabled' | 'configured' | 'reachable' | 'unhealthy' | 'unknown'
 
@@ -49,13 +40,8 @@ export interface ServiceEndpoints {
   managementUrl?: string
 }
 
-/**
- * What NOMAD may do with this service. Workload capabilities are ENFORCED
- * server-side (system controller); model/content capabilities are descriptive
- * in PR 1 — their enforcement lands with the provider-ownership work (PR 3)
- * and Supply Depot UI (PR 2). Keep this list minimal: add a capability only
- * when a consumer exists.
- */
+// Workload capabilities are enforced server-side in the system controller;
+// model/content capabilities are enforced by the provider layer.
 export interface ServiceCapabilities {
   canInstall: boolean
   canUninstall: boolean

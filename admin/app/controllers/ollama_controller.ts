@@ -322,11 +322,10 @@ export default class OllamaController {
       }
     }
 
-    // Honest boundary: when deployment configuration already owns backend
-    // selection (Kubernetes, or LLM_PROVIDER/LLM_HOST/OLLAMA_HOST env), a KV
-    // save here would report success but never win provider resolution —
-    // refuse it with the actionable alternative instead. The clear path above
-    // stays available everywhere: removing stale state is always safe.
+    // Where env config already owns backend selection, a KV save would report
+    // success but never win provider resolution — refuse it with the actionable
+    // alternative. The clear path above stays available: removing stale state
+    // is always safe.
     const lock = resolveRemoteConfigLock({
       kubernetesMode: DockerService.isKubernetesMode(),
       llmProvider: env.get('LLM_PROVIDER'),
