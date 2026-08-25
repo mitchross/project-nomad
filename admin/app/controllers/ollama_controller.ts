@@ -15,6 +15,13 @@ import { SERVICE_NAMES } from '../../constants/service_names.js'
 import logger from '@adonisjs/core/services/logger'
 import type { ChatMessage } from '../services/llm/llm_provider.js'
 import { ensureFreshProvider } from '../services/llm/provider_factory.js'
+import {
+  probeNativeOllama,
+  probeOpenAICompatible,
+  resolveRemoteConfigLock,
+  REMOTE_CONFIG_LOCK_MESSAGES,
+} from '../services/llm/remote_ollama_config.js'
+import env from '#start/env'
 
 @inject()
 export default class OllamaController {
@@ -259,14 +266,10 @@ export default class OllamaController {
     if (!remoteUrl) {
       return { configured: false, connected: false }
     }
-    try {
-      const testResponse = await fetch(`${remoteUrl.replace(/\/$/, '')}/v1/models`, {
-        signal: AbortSignal.timeout(3000),
-      })
-      return { configured: true, connected: testResponse.ok }
-    } catch {
-      return { configured: true, connected: false }
-    }
+    // Same native-Ollama probe configureRemote validates with — status and
+    // Save & Test must never disagree about what a valid backend is.
+    const connected = await probeNativeOllama(remoteUrl, 3000)
+    return { configured: true, connected }
   }
 
   async configureRemote({ request, response }: HttpContext) {
@@ -300,6 +303,24 @@ export default class OllamaController {
       }
     }
 
+    // Honest boundary: when deployment configuration already owns backend
+    // selection (Kubernetes, or LLM_PROVIDER/LLM_HOST/OLLAMA_HOST env), a KV
+    // save here would report success but never win provider resolution —
+    // refuse it with the actionable alternative instead. The clear path above
+    // stays available everywhere: removing stale state is always safe.
+    const lock = resolveRemoteConfigLock({
+      kubernetesMode: DockerService.isKubernetesMode(),
+      llmProvider: env.get('LLM_PROVIDER'),
+      llmHost: env.get('LLM_HOST'),
+      ollamaHost: env.get('OLLAMA_HOST'),
+    })
+    if (lock) {
+      return response.status(409).send({
+        success: false,
+        message: REMOTE_CONFIG_LOCK_MESSAGES[lock],
+      })
+    }
+
     try {
       assertNotCloudMetadataUrl(remoteUrl)
     } catch (err) {
@@ -316,29 +337,12 @@ export default class OllamaController {
     // passing a generic /v1/models probe here would save successfully and
     // then fail on every real call. Those backends are configured with
     // LLM_PROVIDER=openai + LLM_HOST instead (provider selector UI planned).
-    const base = remoteUrl.trim().replace(/\/+$/, '')
-    let nativeOllama = false
-    try {
-      const versionResponse = await fetch(`${base}/api/version`, {
-        signal: AbortSignal.timeout(5000),
-      })
-      nativeOllama = versionResponse.ok
-    } catch {
-      nativeOllama = false
-    }
+    const nativeOllama = await probeNativeOllama(remoteUrl, 5000)
 
     if (!nativeOllama) {
       // Distinguish "OpenAI-compatible but not Ollama" from "unreachable" so
       // the user gets an actionable message instead of a false connect error.
-      let openAiCompatible = false
-      try {
-        const modelsResponse = await fetch(`${base}/v1/models`, {
-          signal: AbortSignal.timeout(5000),
-        })
-        openAiCompatible = modelsResponse.ok
-      } catch {
-        openAiCompatible = false
-      }
+      const openAiCompatible = await probeOpenAICompatible(remoteUrl, 5000)
 
       if (openAiCompatible) {
         return response.status(400).send({

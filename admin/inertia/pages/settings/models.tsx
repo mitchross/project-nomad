@@ -26,7 +26,7 @@ export default function ModelsPage(props: {
   models: {
     availableModels: NomadOllamaModel[]
     installedModels: NomadInstalledModel[]
-    settings: { chatSuggestionsEnabled: boolean; aiAssistantCustomName: string; remoteOllamaUrl: string; ollamaFlashAttention: boolean; autoThinking: boolean }
+    settings: { chatSuggestionsEnabled: boolean; aiAssistantCustomName: string; remoteOllamaUrl: string; remoteOllamaLock: 'kubernetes' | 'env' | null; ollamaFlashAttention: boolean; autoThinking: boolean }
   }
 }) {
   const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
@@ -406,6 +406,14 @@ export default function ModelsPage(props: {
 
           <StyledSectionHeader title="Remote Connection" className="mt-8 mb-4" />
           <div className="bg-surface-primary rounded-lg border-2 border-border-subtle p-6">
+            {props.models.settings.remoteOllamaLock ? (
+              <p className="text-sm text-text-secondary">
+                {props.models.settings.remoteOllamaLock === 'kubernetes'
+                  ? 'On Kubernetes, the AI backend is configured through deployment environment variables (LLM_PROVIDER / LLM_HOST / OLLAMA_HOST — e.g. the Kustomize ollama or external-llm component), not through this field.'
+                  : 'The AI backend is currently selected by deployment environment variables (LLM_PROVIDER / LLM_HOST / OLLAMA_HOST), which take precedence over this field. Change or unset those variables to manage the backend here.'}
+              </p>
+            ) : (
+            <>
             <p className="text-sm text-text-secondary mb-4">
               Connect to a remote <strong>Ollama</strong> instance running on another machine.
               The remote host must be started with <code className="bg-surface-secondary px-1 rounded">OLLAMA_HOST=0.0.0.0</code>.
@@ -450,6 +458,8 @@ export default function ModelsPage(props: {
                 </StyledButton>
               )}
             </div>
+            </>
+            )}
           </div>
 
           <ActiveModelDownloads withHeader />
