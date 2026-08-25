@@ -37,6 +37,8 @@ jobs:
           --files llm_provider_fingerprint
           --files require_docker_runtime
           --files remote_ollama_config
+          --files service_integration_resolver
+          --files service_integration_probes
           --force-exit
         working-directory: ./admin
         env:

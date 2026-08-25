@@ -549,7 +549,7 @@ router
       tags: ['system'],
       request: installServiceValidator,
     })
-    documented(router.post('/services/uninstall', [SystemController, 'uninstallService']).use(middleware.requireDockerRuntime()), {
+    documented(router.post('/services/uninstall', [SystemController, 'uninstallService']), {
       summary: 'Uninstall a service',
       tags: ['system'],
       request: uninstallServiceValidator,
@@ -577,17 +577,17 @@ router
       tags: ['system'],
       request: customAppValidator,
     })
-    documented(router.put('/services/custom', [SystemController, 'updateCustomApp']).use(middleware.requireDockerRuntime()), {
+    documented(router.put('/services/custom', [SystemController, 'updateCustomApp']), {
       summary: 'Update a custom app',
       tags: ['system'],
       request: updateCustomAppValidator,
     })
-    documented(router.post('/services/custom/update', [SystemController, 'updateCustomApp_pullLatest']).use(middleware.requireDockerRuntime()), {
+    documented(router.post('/services/custom/update', [SystemController, 'updateCustomApp_pullLatest']), {
       summary: 'Pull the latest version of a custom app',
       tags: ['system'],
       request: installServiceValidator,
     })
-    documented(router.delete('/services/custom', [SystemController, 'deleteCustomApp']).use(middleware.requireDockerRuntime()), {
+    documented(router.delete('/services/custom', [SystemController, 'deleteCustomApp']), {
       summary: 'Delete a custom app',
       tags: ['system'],
       request: deleteCustomAppValidator,
@@ -601,12 +601,12 @@ router
       tags: ['system'],
       request: setServiceCustomUrlValidator,
     })
-    documented(router.get('/services/:name/logs', [SystemController, 'getServiceLogs']).use(middleware.requireDockerRuntime()), {
+    documented(router.get('/services/:name/logs', [SystemController, 'getServiceLogs']), {
       summary: 'Get service logs',
       tags: ['system'],
       query: serviceLogsValidator,
     })
-    documented(router.get('/services/:name/stats', [SystemController, 'getServiceStats']).use(middleware.requireDockerRuntime()), {
+    documented(router.get('/services/:name/stats', [SystemController, 'getServiceStats']), {
       summary: 'Get service stats',
       tags: ['system'],
     })

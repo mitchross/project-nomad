@@ -24,6 +24,7 @@ import { isNewerVersion } from '../utils/version.js'
 import { invalidateAssistantNameCache } from '../../config/inertia.js'
 import { KiwixLibraryService } from '#services/kiwix_library_service'
 import { K8S_SERVICE_URL_ENV_VARS } from '../utils/k8s_service_env.js'
+import { ServiceIntegrationResolver } from './service_integration/resolver.js'
 
 @inject()
 export class SystemService {
@@ -363,11 +364,27 @@ export class SystemService {
       return []
     }
 
+    // Per-service integration descriptors (ownership/availability/endpoints/
+    // capabilities) — computed, additive, never persisted. Cheap: one KV read
+    // plus cached health lookups; probes never run inline.
+    const integrations = await ServiceIntegrationResolver.resolveAll(
+      services.map((s) => ({
+        service_name: s.service_name,
+        installed: s.installed,
+        is_custom: s.is_custom,
+        is_deprecated: s.is_deprecated,
+        ui_location: s.ui_location,
+        custom_url: s.custom_url,
+      })),
+      statuses
+    )
+
     const toReturn: ServiceSlim[] = []
 
     for (const service of services) {
       const status = statuses.find((s) => s.service_name === service.service_name)
       toReturn.push({
+        integration: integrations.get(service.service_name),
         id: service.id,
         service_name: service.service_name,
         friendly_name: service.friendly_name,
