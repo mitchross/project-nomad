@@ -97,8 +97,9 @@ export default await Env.create(new URL('../', import.meta.url), {
   |----------------------------------------------------------
   */
   KIWIX_URL: Env.schema.string.optional(),
+  KIWIX_BROWSER_URL: Env.schema.string.optional(),
+  KIWIX_CONTENT_MODE: Env.schema.enum.optional(['shared', 'external'] as const),
   KOLIBRI_URL: Env.schema.string.optional(),
-  PROTOMAPS_URL: Env.schema.string.optional(),
   CYBERCHEF_URL: Env.schema.string.optional(),
   FLATNOTES_URL: Env.schema.string.optional(),
 

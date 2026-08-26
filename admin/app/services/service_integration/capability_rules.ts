@@ -61,6 +61,32 @@ export function computeCapabilities(input: {
 }
 
 /**
+ * How this deployment's Kiwix relates to NOMAD's content.
+ * - 'shared': NOMAD writes ZIMs and library.xml to storage Kiwix serves (the
+ *   Docker bind mount, or the shared PVC in the Kubernetes component).
+ * - 'external': someone else's Kiwix. NOMAD links to it and nothing more —
+ *   its library is not ours to write.
+ */
+export type KiwixContentMode = 'shared' | 'external'
+
+export function parseKiwixContentMode(raw: string | undefined | null): KiwixContentMode {
+  return raw?.trim().toLowerCase() === 'external' ? 'external' : 'shared'
+}
+
+/**
+ * Content ownership for Kiwix. 'shared' is the default because it describes
+ * every topology NOMAD ships; declaring 'external' is how an operator points
+ * at a Kiwix whose library NOMAD must not touch.
+ */
+export function resolveContentOwner(
+  provisioner: WorkloadProvisioner,
+  mode: KiwixContentMode
+): ResourceOwner {
+  if (provisioner === 'none') return 'none'
+  return mode === 'external' ? 'external' : 'nomad'
+}
+
+/**
  * Default ownership when no explicit setting exists. A Docker-managed local
  * Ollama is NOMAD's; a Kubernetes Ollama on LLM_HOST/OLLAMA_HOST is assumed to
  * be the bundled NOMAD-dedicated deployment (a shared one needs the opt-out);
@@ -76,15 +102,6 @@ export function defaultModelOwner(input: {
   if (input.provisioner === 'nomad-docker') return 'nomad'
   if (input.runtimeContext === 'kubernetes' && input.provisioner === 'gitops') return 'nomad'
   return 'external'
-}
-
-/**
- * NOMAD owns the shared ZIM library and its XML in every supported topology
- * (Docker bind mount, or the shared-PVC Kubernetes component). An
- * endpoint-only external Kiwix would be 'external'; not yet supported.
- */
-export function defaultContentOwner(provisioner: WorkloadProvisioner): ResourceOwner {
-  return provisioner === 'none' ? 'none' : 'nomad'
 }
 
 /** Human messages for refusals, keyed by capability. */

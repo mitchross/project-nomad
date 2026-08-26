@@ -8,7 +8,15 @@ spec:
       containers:
         - name: admin
           env:
-            # Cluster-internal URL — the admin talks to Kiwix's API directly;
-            # users browse content through NOMAD's own Content Explorer.
+            # Cluster-internal URL the admin uses to read and write the library.
             - name: KIWIX_URL
               value: http://kiwix:8080
+            # Set this to the ingress hostname if you want a launch link to
+            # Kiwix itself. Left unset, NOMAD's Content Explorer is the only
+            # way in — the URL above is not resolvable from a browser.
+            # - name: KIWIX_BROWSER_URL
+            #   value: https://kiwix.example.com
+            # 'external' turns off content management for a Kiwix that is not
+            # backed by NOMAD's shared library PVC.
+            # - name: KIWIX_CONTENT_MODE
+            #   value: external
