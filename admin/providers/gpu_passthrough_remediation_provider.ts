@@ -26,6 +26,12 @@ export default class GpuPassthroughRemediationProvider {
   async boot() {
     if (this.app.getEnvironment() !== 'web') return
 
+    // These repair paths all reach for the Docker socket. Where NOMAD does not
+    // provision workloads (Kubernetes), there is no socket and nothing to
+    // repair — the cluster owns the workload.
+    const { ServiceIntegrationResolver } = await import('#services/service_integration/resolver')
+    if (!ServiceIntegrationResolver.canProvisionWorkloads()) return
+
     setImmediate(async () => {
       try {
         const KVStore = (await import('#models/kv_store')).default
