@@ -364,9 +364,8 @@ export class SystemService {
       return []
     }
 
-    // Per-service integration descriptors (ownership/availability/endpoints/
-    // capabilities) — computed, additive, never persisted. Cheap: one KV read
-    // plus cached health lookups; probes never run inline.
+    // Integration descriptors: computed, never persisted. One KV read plus
+    // cached health lookups — probes never run inline.
     const integrations = await ServiceIntegrationResolver.resolveAll(
       services.map((s) => ({
         service_name: s.service_name,
@@ -980,9 +979,7 @@ export class SystemService {
    *
    * Returns the fetched service status list so callers can reuse it without a second Docker API call.
    *
-   * In Kubernetes mode, there is no Docker socket. Instead, services are considered
-   * installed if their corresponding URL environment variable is configured, since
-   * companion services are deployed as separate K8s pods.
+   * Kubernetes mode has no Docker socket — see _syncServicesForKubernetes().
    */
   private async _syncContainersWithDatabase(): Promise<{ service_name: string; status: string }[]> {
     if (DockerService.isKubernetesMode()) {
@@ -1034,13 +1031,11 @@ export class SystemService {
   }
 
   /**
-   * In Kubernetes, companion services are deployed as separate pods. We detect
-   * which ones are available by checking if their URL environment variable is set.
-   * The LLM provider (Ollama/llama-cpp) is detected via LLM_HOST or OLLAMA_HOST.
+   * Companion services run as separate pods, so availability is read from each
+   * service's URL env var (the LLM backend via LLM_HOST / OLLAMA_HOST).
    */
   private async _syncServicesForKubernetes(): Promise<{ service_name: string; status: string }[]> {
-    // Which env vars announce each service is deployed: single source of truth
-    // shared with DockerService.getServiceURL() — see app/utils/k8s_service_env.ts
+    // Shared with DockerService.getServiceURL() — see app/utils/k8s_service_env.ts
     // (KOLIBRI_URL deliberately targets the Gen 2 catalog entry there).
     //
     // Services with a `uiUrl` override get their ui_location updated so the

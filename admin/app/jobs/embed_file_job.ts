@@ -59,9 +59,8 @@ export class EmbedFileJob {
   }
 
   async handle(job: Job) {
-    // This runs in the queue worker process — a separate process from the HTTP
-    // server, so a controller-side provider reset can never reach us. Rebuild
-    // the LLM provider here if its configuration changed since it was built.
+    // Runs in the queue worker, a separate process from the HTTP server, so a
+    // controller-side reset can't reach us — rebuild if the config changed.
     const { ensureFreshProvider } = await import('#services/llm/provider_factory')
     await ensureFreshProvider()
 
@@ -85,16 +84,12 @@ export class EmbedFileJob {
     const ragService = new RagService(dockerService, ollamaService)
 
     try {
-      // Ensure the embedding backend and vector store are configured/reachable.
-      // Deployment-agnostic:
-      //  - LLM_PROVIDER=openai without LLM_HOST is a config error that can
-      //    never self-heal — permanent skip instead of a 30x retry storm.
-      //  - An env-configured backend (LLM_HOST/OLLAMA_HOST — vLLM, llama.cpp,
-      //    or a remote/K8s Ollama) has no local container to discover; the
-      //    "not installed" permanent-skip only applies when we'd genuinely
-      //    need the local AI Assistant container and it isn't there.
-      //  - Qdrant is resolved the same way RagService does: QDRANT_HOST env
-      //    first (K8s / bring-your-own), then Docker container discovery.
+      // Check the embedding backend and vector store without assuming a local
+      // container: LLM_PROVIDER=openai with no LLM_HOST can never self-heal, so
+      // it's a permanent skip; an env-configured backend has no container to
+      // discover, so the "not installed" skip applies only when we'd genuinely
+      // need the local AI Assistant. Qdrant resolves as RagService does —
+      // QDRANT_HOST first, then container discovery.
       // Use UnrecoverableError for "not installed" so BullMQ won't retry —
       // retrying 30x when the backend doesn't exist just wastes Redis connections.
       if (env.get('LLM_PROVIDER') === 'openai' && !env.get('LLM_HOST')) {

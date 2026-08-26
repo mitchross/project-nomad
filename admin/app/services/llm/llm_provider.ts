@@ -1,9 +1,5 @@
-/**
- * LLM Provider abstraction layer.
- *
- * Defines a common interface for interacting with LLM backends (Ollama, OpenAI-compatible, etc.).
- * Implementations handle the transport details; consumers only depend on this interface.
- */
+// Common interface over LLM backends (Ollama, OpenAI-compatible). Implementations
+// own the transport; consumers depend only on this.
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -77,22 +73,15 @@ export interface LLMProvider {
   supportsModelManagement(): boolean
 
   /**
-   * Whether this provider supports the Ollama-native /api/generate benchmark path,
-   * which returns precise token counts and timing metrics.
-   * OpenAI-compatible providers fall back to wall-clock estimation.
+   * Whether the Ollama-native /api/generate benchmark path (precise token counts
+   * and timings) is available. OpenAI-compat falls back to wall-clock estimation.
    */
   supportsNativeBenchmark(): boolean
 
   /**
-   * Pull/download a model (Ollama only).
-   *
-   * progressCallback receives percent (0-100) and an optional bytes object with
-   * downloadedBytes/totalBytes. abortSignal allows cancellation. jobId is opaque
-   * to the provider — passed through for logging only.
-   *
-   * TODO: actually wire abort + bytes through OllamaProvider (upstream commits
-   * 6c33a96 + c8cb79a). For now, the extra params are accepted to keep callers
-   * compiling but the OllamaProvider implementation may ignore them.
+   * Pull/download a model (Ollama only). `jobId` is opaque — logging only.
+   * TODO: wire abortSignal + bytes through OllamaProvider; accepted today so
+   * callers compile, but the implementation may ignore them.
    */
   pullModel?(
     model: string,
@@ -108,18 +97,16 @@ export interface LLMProvider {
   checkModelHasThinking?(modelName: string): Promise<boolean>
 
   /**
-   * Whether the embedding model is currently GPU-offloaded (non-zero VRAM).
-   * Ollama-only signal used to pace CPU-bound ingestion. Providers that can't
-   * report placement (OpenAI-compatible backends) should omit this — callers
-   * treat "not implemented" as "don't pace".
+   * Whether the embedding model is GPU-offloaded — Ollama-only, used to pace
+   * CPU-bound ingestion. Omit when placement is unknowable; callers read
+   * "not implemented" as "don't pace".
    */
   isEmbeddingGpuAccelerated?(): Promise<boolean>
 
   /**
-   * Unload every loaded chat model except the embedding model and `targetModel`,
-   * enforcing the "at most one chat model resident in VRAM" invariant. Ollama-only;
-   * OpenAI-compatible backends manage their own memory and should omit this.
-   * Returns the names of the models that were sent an unload hint.
+   * Unload every chat model except the embedding model and `targetModel` — the
+   * "one chat model resident in VRAM" invariant. Ollama-only; OpenAI-compat
+   * backends manage their own memory. Returns the models sent an unload hint.
    */
   unloadAllChatModelsExcept?(targetModel: string | null): Promise<string[]>
 
