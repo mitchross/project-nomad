@@ -34,6 +34,10 @@ export const KV_STORE_SCHEMA = {
   'contentAutoUpdate.windowResetAt':     'string',
   'ui.hasVisitedEasySetup':     'boolean',
   'ui.theme':                   'string',
+  // JSON map of Qdrant collection name → embedding identity fingerprint, so a
+  // change of embedding model/endpoint/prefixes is detected before it silently
+  // mixes incompatible vectors into an existing collection.
+  'rag.embeddingFingerprints':  'string',
   'ai.assistantCustomName':     'string',
   'gpu.type':                   'string',
   // Legacy remote-backend URL. Since the protocol-aware settings landed it is

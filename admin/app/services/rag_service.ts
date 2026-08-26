@@ -28,6 +28,13 @@ import { ZIMExtractionService } from './zim_extraction_service.js'
 import { ZIM_BATCH_SIZE } from '../../constants/zim_extraction.js'
 import { ProcessAndEmbedFileResponse, ProcessZIMFileResponse, RAGResult, RerankedRAGResult } from '../../types/rag.js'
 import env from '#start/env'
+import {
+  computeEmbeddingFingerprint,
+  describeDimensionMismatch,
+  describeIdentityMismatch,
+  EmbeddingIdentityMismatchError,
+  type EmbeddingIdentity,
+} from './rag/embedding_fingerprint.js'
 
 export type EmbedSingleFileFailureCode =
   | 'not_found'
@@ -144,6 +151,15 @@ export class RagService {
             distance: 'Cosine',
           },
         })
+        // Record what built it, so a later configuration change is detected
+        // instead of silently mixing incompatible vectors.
+        await this._recordEmbeddingFingerprint(collectionName)
+      } else {
+        // Throws EmbeddingIdentityMismatchError when the collection was built
+        // with a different embedding configuration. Never mutates or deletes
+        // anything — the operator chooses between restoring settings and
+        // reindexing.
+        await this._verifyEmbeddingIdentity(collectionName, dimensions)
       }
 
       // Create payload indexes for faster filtering (idempotent — Qdrant ignores duplicates)
@@ -165,6 +181,127 @@ export class RagService {
     } catch (error) {
       logger.error('Error ensuring Qdrant collection:', error)
       throw error
+    }
+  }
+
+  /**
+   * Guard the embedding response shape: one vector per input, each of the
+   * configured dimension. Mismatches mean the backend is serving a different
+   * model than configured (or is misbehaving) — fail loudly here rather than
+   * writing misaligned or wrong-sized vectors into the knowledge base.
+   */
+  private _assertEmbeddingResponse(
+    embeddings: number[][] | undefined,
+    expectedCount: number,
+    model: string
+  ): void {
+    if (!Array.isArray(embeddings) || embeddings.length !== expectedCount) {
+      throw new Error(
+        `Embedding backend returned ${embeddings?.length ?? 0} vectors for ${expectedCount} inputs (model: ${model}). Refusing to write misaligned vectors.`
+      )
+    }
+    const expectedDimension = RagService.EMBEDDING_DIMENSION
+    for (const vector of embeddings) {
+      if (!Array.isArray(vector) || vector.length !== expectedDimension) {
+        throw new Error(
+          `Embedding backend returned a ${vector?.length ?? 0}-dimensional vector, but ${expectedDimension} is configured (model: ${model}). Check EMBEDDING_MODEL / EMBEDDING_DIMENSIONS.`
+        )
+      }
+    }
+  }
+
+  /**
+   * The embedding identity this deployment is currently configured to produce.
+   * Endpoint is the dedicated embedding host when set, otherwise the LLM host —
+   * matching how embeddings are actually routed. Credentials are excluded by
+   * construction (see normalizeEndpoint).
+   */
+  private _currentEmbeddingIdentity(): EmbeddingIdentity {
+    const endpoint = env.get('EMBEDDING_HOST') || env.get('LLM_HOST') || env.get('OLLAMA_HOST') || ''
+    return {
+      providerKind: env.get('EMBEDDING_HOST')
+        ? 'openai'
+        : env.get('LLM_PROVIDER') === 'openai'
+          ? 'openai'
+          : 'ollama',
+      endpoint,
+      model: RagService.EMBEDDING_MODEL,
+      dimensions: RagService.EMBEDDING_DIMENSION,
+      documentPrefix: RagService.SEARCH_DOCUMENT_PREFIX,
+      queryPrefix: RagService.SEARCH_QUERY_PREFIX,
+    }
+  }
+
+  private async _readFingerprintMap(): Promise<Record<string, string>> {
+    try {
+      const raw = await KVStore.getValue('rag.embeddingFingerprints')
+      if (!raw) return {}
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {}
+    } catch {
+      // Unreadable/corrupt map: treat as "not yet recorded" rather than failing
+      // ingestion — the dimension check below still protects the hard case.
+      return {}
+    }
+  }
+
+  private async _recordEmbeddingFingerprint(collectionName: string): Promise<void> {
+    try {
+      const map = await this._readFingerprintMap()
+      map[collectionName] = computeEmbeddingFingerprint(this._currentEmbeddingIdentity())
+      await KVStore.setValue('rag.embeddingFingerprints', JSON.stringify(map))
+    } catch (error) {
+      logger.warn(`[RAG] Could not record embedding fingerprint for ${collectionName}: ${error}`)
+    }
+  }
+
+  /**
+   * Verify that an existing collection was built by the currently configured
+   * embedding setup. Two independent checks:
+   *
+   *  1. Qdrant's ACTUAL vector size vs the configured dimensions — verifiable
+   *     ground truth, so a mismatch is always fatal (writes/searches would
+   *     error anyway).
+   *  2. The recorded fingerprint vs the current one — catches the dangerous
+   *     silent case (same dimensions, different model/endpoint/prefixes).
+   *
+   * Collections that predate fingerprinting have nothing recorded. There is no
+   * evidence of a mismatch for them, and refusing would break every existing
+   * install, so the current identity is adopted and logged — observation starts
+   * now, and any subsequent change is caught.
+   */
+  private async _verifyEmbeddingIdentity(collectionName: string, dimensions: number): Promise<void> {
+    let actualSize: number | undefined
+    try {
+      const info = await this.qdrant!.getCollection(collectionName)
+      const vectors = (info as any)?.config?.params?.vectors
+      actualSize = typeof vectors?.size === 'number' ? vectors.size : undefined
+    } catch (error) {
+      logger.warn(`[RAG] Could not read collection config for ${collectionName}: ${error}`)
+    }
+
+    if (typeof actualSize === 'number' && actualSize !== dimensions) {
+      const message = describeDimensionMismatch(collectionName, actualSize, dimensions)
+      logger.error(`[RAG] ${message}`)
+      throw new EmbeddingIdentityMismatchError(collectionName, 'dimensions', message)
+    }
+
+    const map = await this._readFingerprintMap()
+    const recorded = map[collectionName]
+    const current = computeEmbeddingFingerprint(this._currentEmbeddingIdentity())
+
+    if (!recorded) {
+      logger.info(
+        `[RAG] Adopting current embedding configuration as the identity of existing collection "${collectionName}" (no fingerprint recorded before this version). Future changes will be detected.`
+      )
+      await this._recordEmbeddingFingerprint(collectionName)
+      return
+    }
+
+    if (recorded !== current) {
+      const message = describeIdentityMismatch(collectionName)
+      logger.error(`[RAG] ${message}`)
+      throw new EmbeddingIdentityMismatchError(collectionName, 'identity', message)
     }
   }
 
@@ -444,6 +581,12 @@ export class RagService {
         logger.debug(`[RAG] Embedding batch ${batchIdx + 1}/${totalBatches} (${batch.length} chunks)`)
 
         const response = await this.ollamaService.embed(resolvedModel, batch)
+
+        // Validate the response before it reaches Qdrant. A backend that
+        // returns fewer vectors than inputs (or vectors of the wrong size)
+        // would otherwise shift chunk↔vector alignment or be rejected deep
+        // inside upsert with an opaque error.
+        this._assertEmbeddingResponse(response.embeddings, batch.length, resolvedModel)
 
         embeddings.push(...response.embeddings)
 
@@ -947,6 +1090,7 @@ export class RagService {
       }
 
       const response = await this.ollamaService.embed(resolvedModel, [prefixedQuery])
+      this._assertEmbeddingResponse(response.embeddings, 1, resolvedModel)
 
       // Perform semantic search with a higher limit to enable reranking
       const searchLimit = limit * 3 // Get more results for reranking

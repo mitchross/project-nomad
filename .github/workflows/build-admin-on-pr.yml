@@ -41,6 +41,7 @@ jobs:
           --files service_integration_probes
           --files service_capabilities_selector
           --files llm_config_precedence
+          --files embedding_fingerprint
           --force-exit
         working-directory: ./admin
         env:
