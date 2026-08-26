@@ -16,6 +16,12 @@ export default class KiwixMigrationProvider {
     // Only run in the web (HTTP server) environment — skip for ace commands and tests
     if (this.app.getEnvironment() !== 'web') return
 
+    // These repair paths all reach for the Docker socket. Where NOMAD does not
+    // provision workloads (Kubernetes), there is no socket and nothing to
+    // repair — the cluster owns the workload.
+    const { ServiceIntegrationResolver } = await import('#services/service_integration/resolver')
+    if (!ServiceIntegrationResolver.canProvisionWorkloads()) return
+
     // Defer past synchronous boot so DB connections and all providers are fully ready
     setImmediate(async () => {
       try {

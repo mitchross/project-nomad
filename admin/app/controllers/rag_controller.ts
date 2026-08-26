@@ -1,4 +1,6 @@
 import { RagService } from '#services/rag_service'
+import { DockerService } from '#services/docker_service'
+import { OllamaService } from '#services/ollama_service'
 import { EmbedFileJob } from '#jobs/embed_file_job'
 import KbRatioRegistry from '#models/kb_ratio_registry'
 import { inject } from '@adonisjs/core'
@@ -13,7 +15,10 @@ import { sanitizeCollectionName } from '../../constants/kb_collections.js'
 
 @inject()
 export default class RagController {
-  constructor(private ragService: RagService) { }
+  constructor(
+    private ragService: RagService,
+    private dockerService: DockerService
+  ) { }
 
   public async upload({ request, response }: HttpContext) {
     const uploadedFile = request.file('file')
@@ -32,6 +37,26 @@ export default class RagController {
     await uploadedFile.move(app.makePath(RagService.UPLOADS_STORAGE_PATH), {
       name: fileName,
     })
+
+    // Admission mirrors the ZIM path (run_download_job): only enqueue when an
+    // embedding backend exists for this deployment. Without this the job is
+    // dispatched, fails UnrecoverableError, and the 202 above claims the upload
+    // was accepted for processing when it never could be. The file is kept —
+    // POST /api/rag/files/embed picks it up once a backend is configured.
+    if (!(await OllamaService.isEmbeddingBackendConfigured(this.dockerService))) {
+      logger.info(
+        '[RagController] Stored %s without embedding — no embedding backend configured.',
+        fileName
+      )
+      return response.status(202).json({
+        message:
+          'File uploaded and stored. No embedding backend is configured, so it has not been added to the knowledge base yet — configure one and embed the file to index it.',
+        embeddingDeferred: true,
+        fileName,
+        filePath: `/${RagService.UPLOADS_STORAGE_PATH}/${fileName}`,
+        ...(collection ? { collection } : {}),
+      })
+    }
 
     // Dispatch background job for embedding
     const result = await EmbedFileJob.dispatch({
@@ -139,6 +164,18 @@ export default class RagController {
 
   public async embedFile({ request, response }: HttpContext) {
     const { source, force } = await request.validateUsing(embedFileSchema)
+
+    // Same admission rule as upload: refuse rather than enqueue a job that can
+    // only fail. 503 because it is configuration, not the request, that is
+    // missing — the same call succeeds once a backend exists.
+    if (!(await OllamaService.isEmbeddingBackendConfigured(this.dockerService))) {
+      return response.status(503).json({
+        error:
+          'No embedding backend is configured for this deployment, so files cannot be added to the knowledge base.',
+        code: 'backend_unavailable',
+      })
+    }
+
     const result = await this.ragService.embedSingleFile(source, force ?? false)
     if (!result.success) {
       const status = {
