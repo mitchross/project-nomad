@@ -393,7 +393,7 @@ export class ZimService {
 
       if (hasRemainingZimJobs) {
         logger.info('[ZimService] Skipping container restart - more ZIM downloads pending')
-      } else {
+      } else if (!DockerService.isKubernetesMode()) {
         // If kiwix is already running in library mode, --monitorLibrary will pick up
         // the XML change automatically — no restart needed.
         const isLegacy = await this.dockerService.isKiwixOnLegacyConfig()
@@ -408,6 +408,12 @@ export class ZimService {
               logger.error(`[ZimService] Failed to restart KIWIX container:`, error)
             })
         }
+      } else {
+        // Kubernetes: the pod is the cluster's to restart, not ours, and the
+        // legacy-config probe would query a Docker socket that isn't there.
+        // Writing library.xml is the whole contract — Kiwix picks it up via
+        // --monitorLibrary.
+        logger.info('[ZimService] Kubernetes runtime — library XML updated, pod lifecycle left to the cluster.')
       }
     }
 
