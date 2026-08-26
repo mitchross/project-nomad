@@ -2,19 +2,14 @@ import type { ServiceSlim } from '../../types/services.js'
 import type { ServiceCapabilities } from '../../app/services/service_integration/types.js'
 
 /**
- * Frontend accessor for the server-resolved per-service capabilities
- * (ServiceIntegrationResolver). One place to read them so pages don't grow
- * their own `isKubernetesMode`-style conditionals.
+ * Frontend accessor for server-resolved capabilities, so pages don't grow their
+ * own isKubernetesMode-style conditionals.
  *
- * IMPORTANT: this is presentation only. The server enforces every capability
- * independently (system_controller.denyUnlessCapable) — React is never the
- * security boundary. Hiding an action here just stops users being offered
- * buttons that would be refused.
- *
- * Fallback: when a response predates descriptors (`integration` absent), all
- * capabilities read TRUE. That preserves the upstream Docker appliance
- * exactly and can only ever surface an action the server would then refuse —
- * never hide one that works.
+ * Presentation only — the server enforces every capability independently in
+ * denyUnlessCapable(); hiding an action here just stops offering a button that
+ * would be refused. When `integration` is absent (a response predating
+ * descriptors) every capability reads true, which preserves the upstream Docker
+ * appliance and can only over-offer, never hide something that works.
  */
 const ALL_ALLOWED: ServiceCapabilities = {
   canInstall: true,
@@ -41,9 +36,8 @@ export function can(
 }
 
 /**
- * True when NOMAD doesn't provision this service's workload — the cluster or
- * an external operator does. Used to phrase update/version information as a
- * notice ("managed by GitOps") instead of an actionable control.
+ * True when the cluster or an external operator provisions this workload, so
+ * version info is phrased as a notice rather than an actionable control.
  */
 export function isExternallyProvisioned(service: Pick<ServiceSlim, 'integration'>): boolean {
   const provisioner = service.integration?.provisioner

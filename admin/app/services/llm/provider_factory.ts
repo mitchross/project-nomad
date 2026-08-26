@@ -1,24 +1,11 @@
-/**
- * LLM Provider factory.
- *
- * Creates the appropriate LLM provider based on environment configuration.
- *
- * Environment variables:
- *   LLM_PROVIDER  — 'ollama' | 'openai'  (default: 'ollama')
- *   LLM_HOST      — Base URL for LLM API (required for openai, optional for ollama)
- *   LLM_API_KEY   — API key (default: 'unused', for local servers)
- *   OLLAMA_HOST   — Legacy fallback for Ollama host
- *
- * The provider is a per-process singleton, and NOMAD runs more than one
- * process (HTTP server + BullMQ queue worker — see install/entrypoint.sh), so
- * an in-process reset can never invalidate the other process. Instead the
- * singleton carries a fingerprint of the configuration that selects the
- * provider; `ensureFreshProvider()` recomputes it and rebuilds the provider
- * when configuration changed. Long-lived entry points that may execute after a
- * configuration change (queue jobs, the remote-config controller) call it
- * before doing provider work, which makes provider resolution self-correcting
- * across processes without any distributed invalidation.
- */
+// Builds the LLM provider from LLM_PROVIDER / LLM_HOST / LLM_API_KEY (see
+// .env.example).
+//
+// The provider is a per-process singleton and NOMAD runs two processes (HTTP
+// server + queue worker, see install/entrypoint.sh), so an in-process reset
+// can't invalidate the other one. The singleton instead carries a fingerprint
+// of its config; ensureFreshProvider() recomputes it and rebuilds on change,
+// making resolution self-correcting without distributed invalidation.
 
 import { createHash } from 'node:crypto'
 import env from '#start/env'
@@ -33,10 +20,9 @@ let _instance: LLMProvider | null = null
 let _fingerprint: string | null = null
 
 /**
- * The backend actually in effect, and where its configuration came from.
- * `source` drives ownership decisions elsewhere (a managed local container is
- * ours to mutate; an env- or Settings-configured remote is not, unless the
- * operator says so explicitly).
+ * The backend in effect and where its config came from. `source` drives
+ * ownership: a managed local container is ours to mutate, a remote is not
+ * unless the operator says so.
  */
 export interface EffectiveLLMConfig {
   providerType: 'ollama' | 'openai'
@@ -47,13 +33,9 @@ export interface EffectiveLLMConfig {
 }
 
 /**
- * Configuration precedence — deliberately unchanged by protocol selection:
- *   1. deployment environment (LLM_PROVIDER / LLM_HOST / OLLAMA_HOST)
- *   2. Settings-configured remote (KV: protocol + URL + optional key)
- *   3. NOMAD's managed Docker container (discovery)
- *
- * Declarative/GitOps configuration always outranks the Settings field, which
- * is why the Settings flow refuses to save while env config is present.
+ * Precedence: env (LLM_PROVIDER/LLM_HOST/OLLAMA_HOST) → Settings remote (KV) →
+ * managed Docker container. Declarative config always outranks the Settings
+ * field, which is why that flow refuses to save while env config is present.
  */
 export function resolveConfigFrom(input: {
   envProviderType?: string
@@ -110,10 +92,9 @@ function buildProvider(): LLMProvider {
 }
 
 /**
- * Pure fingerprint computation over exactly the configuration that selects/
- * parameterizes the provider. The API key contributes only a short hash — its
- * identity matters (rotating it must rebuild the client) but the secret never
- * appears in the fingerprint, logs, or errors. Exported for unit tests.
+ * Fingerprint over exactly the config that selects the provider. The API key
+ * contributes a short hash only — rotating it must rebuild the client, but the
+ * secret never reaches the fingerprint, logs or errors. Exported for tests.
  */
 export function computeConfigFingerprint(input: {
   providerType: string
@@ -137,10 +118,7 @@ export function fingerprintConfig(config: EffectiveLLMConfig): string {
   })
 }
 
-/**
- * Gather the live configuration from env AND Settings, applying precedence.
- * Async because Settings live in the database.
- */
+/** Live config from env and Settings, with precedence applied. */
 export async function resolveEffectiveConfig(): Promise<EffectiveLLMConfig> {
   let kvProtocol: string | null = null
   let kvHost: string | null = null
@@ -166,19 +144,17 @@ export async function resolveEffectiveConfig(): Promise<EffectiveLLMConfig> {
 }
 
 /**
- * Gather the live configuration and fingerprint it. The KV remote URL is
- * included for the Ollama path because OllamaProvider resolves it at
- * _initialize() time; a runtime change through Settings must produce a
- * different fingerprint.
+ * Resolve and fingerprint. The KV remote URL counts on the Ollama path too:
+ * OllamaProvider resolves it at _initialize(), so a Settings change there must
+ * produce a different fingerprint.
  */
 export async function resolveConfigFingerprint(): Promise<string> {
   return fingerprintConfig(await resolveEffectiveConfig())
 }
 
 /**
- * Synchronous accessor. Returns the cached provider or builds one from env.
- * Cannot observe runtime (KV) configuration changes — entry points that may
- * run after a configuration change should use ensureFreshProvider() instead.
+ * Sync accessor: cached provider, or one built from env. Blind to runtime KV
+ * changes — use ensureFreshProvider() where those are possible.
  */
 export function createLLMProvider(): LLMProvider {
   if (_instance) {
@@ -190,9 +166,8 @@ export function createLLMProvider(): LLMProvider {
 }
 
 /**
- * Rebuild the provider if the resolved configuration changed since it was
- * built (or if it was built without a fingerprint). Safe to call often —
- * a fingerprint match is one env read plus at most one KV read.
+ * Rebuild if the resolved config changed since the provider was built. Cheap
+ * to call often — a match costs one env read plus at most one KV read.
  */
 export async function ensureFreshProvider(): Promise<LLMProvider> {
   const config = await resolveEffectiveConfig()
@@ -201,9 +176,8 @@ export async function ensureFreshProvider(): Promise<LLMProvider> {
     if (_instance) {
       logger.info('[LLMFactory] LLM configuration changed — rebuilding provider')
     }
-    // Built from the EFFECTIVE config, so a Settings-selected protocol
-    // (e.g. OpenAI-compatible) produces the matching provider — the
-    // synchronous path can only see env.
+    // Built from the effective config, so a Settings-selected protocol yields
+    // the matching provider — the sync path only sees env.
     _instance = buildProviderFrom(config)
     _fingerprint = fingerprint
   }

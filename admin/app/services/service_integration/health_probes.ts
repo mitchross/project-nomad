@@ -2,20 +2,13 @@ import logger from '@adonisjs/core/services/logger'
 import type { Availability } from './types.js'
 
 /**
- * Cached, best-effort health probes for env-configured integrations
- * (Kubernetes/BYO endpoints). Docker-managed services don't use these —
- * their availability derives from container state, which the appliance
- * already tracks.
+ * Cached health probes for env-configured integrations. Docker-managed services
+ * don't use these — container state already answers the question.
  *
- * Design constraints (review-agreed):
- * - NEVER probed inline on a request path. `getCachedAvailability()` returns
- *   instantly ('configured' when no result exists yet) and kicks a
- *   background refresh; the next call reads the cached verdict.
- * - Only cluster-internal API URLs are probed. Browser-facing URLs may be
- *   internet-external or LAN-only — probing them from the server is a
- *   hang/SSRF hazard, so they stay 'configured'.
- * - Short timeout, result cached with a TTL; probe failures are verdicts
- *   ('unhealthy'), not exceptions.
+ * Never probed inline on a request path: getCachedAvailability() returns
+ * instantly and kicks a background refresh. Only cluster-internal API URLs are
+ * probed — browser-facing URLs may be LAN-only or external, making a
+ * server-side probe a hang/SSRF hazard. Failures are verdicts, not exceptions.
  */
 
 const PROBE_TIMEOUT_MS = 1500
