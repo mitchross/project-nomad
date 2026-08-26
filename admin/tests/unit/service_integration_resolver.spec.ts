@@ -1,5 +1,6 @@
 import { test } from '@japa/runner'
 import { resolveIntegration, type ResolutionContext } from '../../app/services/service_integration/resolver.js'
+import { parseKiwixContentMode } from '../../app/services/service_integration/capability_rules.js'
 import type { ServiceRowLike } from '../../app/services/service_integration/types.js'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
 
@@ -31,6 +32,7 @@ function ctx(overrides: Partial<ResolutionContext> = {}): ResolutionContext {
     kvRemoteManagedByNomad: null,
     dockerStatusFor: () => undefined,
     availabilityFor: () => 'configured',
+    kiwixContentMode: 'shared',
     ...overrides,
   }
 }
@@ -147,7 +149,69 @@ test.group('ServiceIntegration resolution', () => {
     assert.equal(integration.contentOwner, 'nomad')
     assert.isTrue(integration.capabilities.canManageContent)
     assert.equal(integration.endpoints.managementUrl, '/settings/zim/remote-explorer')
+    // The API URL is a cluster-internal Service name. Offering it as a launch
+    // link would render a button no browser can follow.
+    assert.equal(integration.endpoints.apiUrl, 'http://kiwix:8080')
+    assert.isUndefined(integration.endpoints.browserUrl)
+    assert.isFalse(integration.capabilities.canOpen)
     for (const cap of WORKLOAD_CAPS) assert.isFalse(integration.capabilities[cap], cap)
+  })
+
+  test('K8s Kiwix with an ingress hostname: browse and API addresses stay distinct', ({
+    assert,
+  }) => {
+    const integration = resolveIntegration(
+      row({ service_name: SERVICE_NAMES.KIWIX, installed: true }),
+      ctx({
+        runtimeContext: 'kubernetes',
+        envValue: (name) =>
+          name === 'KIWIX_URL'
+            ? 'http://kiwix:8080'
+            : name === 'KIWIX_BROWSER_URL'
+              ? 'https://kiwix.example.com'
+              : undefined,
+        availabilityFor: () => 'reachable',
+      })
+    )
+    assert.equal(integration.endpoints.apiUrl, 'http://kiwix:8080')
+    assert.equal(integration.endpoints.browserUrl, 'https://kiwix.example.com')
+    assert.isTrue(integration.capabilities.canOpen)
+    // Still NOMAD's library — an ingress doesn't change who writes the content.
+    assert.isTrue(integration.capabilities.canManageContent)
+  })
+
+  test('KIWIX_CONTENT_MODE=external: linked to, never written to', ({ assert }) => {
+    const integration = resolveIntegration(
+      row({ service_name: SERVICE_NAMES.KIWIX, installed: true }),
+      ctx({
+        runtimeContext: 'kubernetes',
+        envValue: (name) =>
+          name === 'KIWIX_URL'
+            ? 'http://kiwix:8080'
+            : name === 'KIWIX_BROWSER_URL'
+              ? 'https://someone-elses-kiwix.example.com'
+              : undefined,
+        availabilityFor: () => 'reachable',
+        kiwixContentMode: 'external',
+      })
+    )
+    assert.equal(integration.contentOwner, 'external')
+    assert.isFalse(integration.capabilities.canManageContent)
+    // Still reachable and still linkable — external means "not ours to write".
+    assert.isTrue(integration.capabilities.canOpen)
+    assert.equal(integration.availability, 'reachable')
+  })
+
+  test('a Kiwix absent from the deployment owns no content in either mode', ({ assert }) => {
+    for (const mode of ['shared', 'external'] as const) {
+      const integration = resolveIntegration(
+        row({ service_name: SERVICE_NAMES.KIWIX, installed: true }),
+        ctx({ runtimeContext: 'kubernetes', envValue: () => undefined, kiwixContentMode: mode })
+      )
+      assert.equal(integration.provisioner, 'none', mode)
+      assert.equal(integration.contentOwner, 'none', mode)
+      assert.isFalse(integration.capabilities.canManageContent, mode)
+    }
   })
 
   test('K8s browser-link companion (Kolibri Gen2): configured, open-only, never probed', ({ assert }) => {
@@ -261,5 +325,20 @@ test.group('ServiceIntegration model ownership', () => {
     )
     assert.equal(integration.modelOwner, 'nomad')
     assert.isTrue(integration.capabilities.canManageModels)
+  })
+})
+
+test.group('Kiwix content mode parsing', () => {
+  test('unset and unrecognised values mean shared — the topology NOMAD ships', ({ assert }) => {
+    assert.equal(parseKiwixContentMode(undefined), 'shared')
+    assert.equal(parseKiwixContentMode(null), 'shared')
+    assert.equal(parseKiwixContentMode(''), 'shared')
+    assert.equal(parseKiwixContentMode('nonsense'), 'shared')
+  })
+
+  test('external is recognised regardless of case or padding', ({ assert }) => {
+    assert.equal(parseKiwixContentMode('external'), 'external')
+    assert.equal(parseKiwixContentMode('  External '), 'external')
+    assert.equal(parseKiwixContentMode('EXTERNAL'), 'external')
   })
 })

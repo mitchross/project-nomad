@@ -5,9 +5,11 @@ import { K8S_SERVICE_URL_ENV_VARS } from '../../utils/k8s_service_env.js'
 import {
   CAPABILITY_DENIED_MESSAGES,
   computeCapabilities,
-  defaultContentOwner,
   defaultModelOwner,
+  parseKiwixContentMode,
+  resolveContentOwner,
 } from './capability_rules.js'
+import type { KiwixContentMode } from './capability_rules.js'
 import { getCachedAvailability } from './health_probes.js'
 import type {
   Availability,
@@ -39,6 +41,14 @@ const K8S_BROWSER_URL_ENV: Partial<Record<string, string>> = {
   [SERVICE_NAMES.FLATNOTES]: 'FLATNOTES_URL',
 }
 
+// Companions NOMAD only links to: it has no API relationship with them, so
+// their URL is a browser destination and is never probed server-side.
+const BROWSER_LINK_COMPANIONS: ReadonlySet<string> = new Set([
+  SERVICE_NAMES.KOLIBRI_GEN2,
+  SERVICE_NAMES.CYBERCHEF,
+  SERVICE_NAMES.FLATNOTES,
+])
+
 export interface ResolutionContext {
   runtimeContext: RuntimeContext
   /** Raw env lookup (process env in production; injected in tests). */
@@ -56,6 +66,8 @@ export interface ResolutionContext {
   dockerStatusFor: (serviceName: string) => string | undefined
   /** Cached availability for an API endpoint (never probes inline). */
   availabilityFor: (serviceName: string, apiUrl: string) => Availability
+  /** Declared Kiwix content mode — see KIWIX_CONTENT_MODE. */
+  kiwixContentMode: KiwixContentMode
 }
 
 function k8sApiUrlFor(serviceName: string, ctx: ResolutionContext): string | undefined {
@@ -85,17 +97,23 @@ export function resolveIntegration(
 
     if (apiUrl) {
       provisioner = 'gitops'
-      if (browserUrl) {
-        // Browser-facing companion (Kolibri/CyberChef/FlatNotes): the URL is
-        // for users' browsers — never probed from the server (may be
-        // internet-external or LAN-only; SSRF/hang hazard).
-        endpoints.browserUrl = browserUrl
+      if (BROWSER_LINK_COMPANIONS.has(row.service_name)) {
+        // No API relationship — the URL is where a user's browser goes. Never
+        // probed: it may be LAN-only or internet-external (SSRF/hang hazard).
+        endpoints.browserUrl = browserUrl ?? apiUrl
         availability = 'configured'
       } else {
         endpoints.apiUrl = apiUrl
         availability = ctx.availabilityFor(row.service_name, apiUrl)
       }
       if (row.service_name === SERVICE_NAMES.KIWIX) {
+        // Kiwix is both an API NOMAD reads/writes and a site users browse, and
+        // the two addresses differ: KIWIX_URL is typically a cluster-internal
+        // Service no browser can resolve. Only an explicit KIWIX_BROWSER_URL
+        // (an ingress hostname) yields a launch link — falling back to the API
+        // URL would render a button that goes nowhere.
+        const kiwixBrowserUrl = ctx.envValue('KIWIX_BROWSER_URL')
+        if (kiwixBrowserUrl) endpoints.browserUrl = kiwixBrowserUrl
         endpoints.managementUrl = '/settings/zim/remote-explorer'
       }
       if (row.service_name === SERVICE_NAMES.OLLAMA) {
@@ -163,7 +181,7 @@ export function resolveIntegration(
     }
   }
   if (row.service_name === SERVICE_NAMES.KIWIX) {
-    contentOwner = defaultContentOwner(provisioner)
+    contentOwner = resolveContentOwner(provisioner, ctx.kiwixContentMode)
   }
 
   const capabilities = computeCapabilities({
@@ -230,6 +248,7 @@ export class ServiceIntegrationResolver {
       kvRemoteManagedByNomad,
       dockerStatusFor: (name) => statusMap.get(name),
       availabilityFor: (name, apiUrl) => getCachedAvailability(name, apiUrl),
+      kiwixContentMode: parseKiwixContentMode(process.env.KIWIX_CONTENT_MODE),
     }
   }
 
