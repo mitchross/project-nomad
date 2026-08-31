@@ -35,6 +35,30 @@ export function can(
   return capabilitiesOf(service)[capability]
 }
 
+export interface ServiceLaunchLocation {
+  uiLocation: string
+  customUrl?: string | null
+}
+
+/**
+ * Select the launch destination from the server-resolved descriptor. Falling
+ * back to persisted fields keeps responses from older Docker builds working.
+ */
+export function launchLocationOf(
+  service: Pick<ServiceSlim, 'integration' | 'ui_location' | 'custom_url'>
+): ServiceLaunchLocation | null {
+  if (service.integration) {
+    const browserUrl = service.integration.endpoints.browserUrl
+    return service.integration.capabilities.canOpen && browserUrl
+      ? { uiLocation: browserUrl }
+      : null
+  }
+
+  return service.ui_location || service.custom_url
+    ? { uiLocation: service.ui_location || '', customUrl: service.custom_url }
+    : null
+}
+
 /**
  * True when the cluster or an external operator provisions this workload, so
  * version info is phrased as a notice rather than an actionable control.

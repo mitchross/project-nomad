@@ -23,6 +23,7 @@ import api from '~/lib/api'
 import Alert from '~/components/Alert'
 import WhatsNewBanner from '~/components/WhatsNewBanner'
 import { SERVICE_NAMES } from '../../constants/service_names'
+import { launchLocationOf } from '~/lib/service_capabilities'
 
 // Maps is a Core Capability (display_order: 4)
 const MAPS_ITEM = {
@@ -133,30 +134,28 @@ export default function Home(props: {
   const shouldHighlightEasySetup = easySetupVisited?.value ? String(easySetupVisited.value) !== 'true' : false
 
   // Add installed services (non-dependency services only)
-  props.system.services
-    .filter((service) => service.installed && (service.ui_location || service.custom_url))
-    .forEach((service) => {
-      items.push({
-        // Inject custom AI Assistant name if this is the chat service
-        label: service.service_name === SERVICE_NAMES.OLLAMA && aiAssistantName ? aiAssistantName : (service.friendly_name || service.service_name),
-        to:
-          service.ui_location || service.custom_url
-            ? getServiceLink(service.ui_location || '', service.custom_url)
-            : '#',
-        target: '_blank',
-        description:
-          service.description ||
-          `Access the ${service.friendly_name || service.service_name} application`,
-        icon: service.icon ? (
-          <DynamicIcon icon={service.icon as DynamicIconName} className="!size-12" />
-        ) : (
-          <IconWifiOff size={48} />
-        ),
-        installed: service.installed,
-        displayOrder: service.display_order ?? 100,
-        poweredBy: service.powered_by ?? null,
-      })
+  props.system.services.forEach((service) => {
+    const launchLocation = launchLocationOf(service)
+    if (!service.installed || !launchLocation) return
+
+    items.push({
+      // Inject custom AI Assistant name if this is the chat service
+      label: service.service_name === SERVICE_NAMES.OLLAMA && aiAssistantName ? aiAssistantName : (service.friendly_name || service.service_name),
+      to: getServiceLink(launchLocation.uiLocation, launchLocation.customUrl),
+      target: '_blank',
+      description:
+        service.description ||
+        `Access the ${service.friendly_name || service.service_name} application`,
+      icon: service.icon ? (
+        <DynamicIcon icon={service.icon as DynamicIconName} className="!size-12" />
+      ) : (
+        <IconWifiOff size={48} />
+      ),
+      installed: service.installed,
+      displayOrder: service.display_order ?? 100,
+      poweredBy: service.powered_by ?? null,
     })
+  })
 
   // Add Maps as a Core Capability
   items.push(MAPS_ITEM)
