@@ -42,7 +42,7 @@ import { useTransmit } from 'react-adonis-transmit'
 import { BROADCAST_CHANNELS } from '../../constants/broadcast'
 import { ServiceSlim } from '../../types/services'
 import { getServiceLink } from '~/lib/navigation'
-import { capabilitiesOf, provisionerNotice } from '~/lib/service_capabilities'
+import { capabilitiesOf, launchLocationOf, provisionerNotice } from '~/lib/service_capabilities'
 import { getSupplyDepotDocLink } from '../../constants/supply_depot_docs'
 import api from '~/lib/api'
 import { toTitleCase } from '../../app/utils/misc'
@@ -880,6 +880,7 @@ function AppCard({
   // Server-resolved capabilities (ServiceIntegrationResolver). Presentation
   // only — every action is independently enforced server-side.
   const caps = capabilitiesOf(service)
+  const launchLocation = launchLocationOf(service)
   const externalNotice = provisionerNotice(service)
   const catColor = service.category ? CATEGORY_COLORS[service.category] ?? CATEGORY_COLORS.custom : CATEGORY_COLORS.custom
   const isDropdownOpen = openDropdown === service.service_name
@@ -1046,10 +1047,10 @@ function AppCard({
 
         {service.installed ? (
           <>
-            {/* Open button — shown when the app has a default location or a user-set custom URL */}
-            {(service.ui_location || service.custom_url) && (
+            {/* Open button — server capabilities decide whether the browser has a usable URL. */}
+            {launchLocation && (
               <a
-                href={getServiceLink(service.ui_location || "", service.custom_url)}
+                href={getServiceLink(launchLocation.uiLocation, launchLocation.customUrl)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-1"

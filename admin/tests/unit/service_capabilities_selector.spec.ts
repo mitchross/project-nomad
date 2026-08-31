@@ -4,6 +4,7 @@ import {
   capabilitiesOf,
   hasNoWorkloadControls,
   isExternallyProvisioned,
+  launchLocationOf,
   provisionerNotice,
 } from '../../inertia/lib/service_capabilities.js'
 import type { ServiceIntegration } from '../../app/services/service_integration/types.js'
@@ -52,9 +53,40 @@ test.group('frontend service capability selector', () => {
     assert.isTrue(can(service, 'canOpen'))
   })
 
+  test('launch location uses the resolved browser URL', ({ assert }) => {
+    const service = {
+      integration: integration({ endpoints: { browserUrl: 'https://kiwix.example.com' } }),
+      ui_location: '/settings/zim/remote-explorer',
+      custom_url: null,
+    }
+    assert.deepEqual(launchLocationOf(service), { uiLocation: 'https://kiwix.example.com' })
+  })
+
+  test('launch location stays hidden when the descriptor denies browser access', ({ assert }) => {
+    const base = integration({ endpoints: { apiUrl: 'http://kiwix:8080' } })
+    const service = {
+      integration: {
+        ...base,
+        capabilities: { ...base.capabilities, canOpen: false },
+      },
+      ui_location: '/settings/zim/remote-explorer',
+      custom_url: null,
+    }
+    assert.isNull(launchLocationOf(service))
+  })
+
+  test('launch location preserves the legacy persisted-field fallback', ({ assert }) => {
+    assert.deepEqual(
+      launchLocationOf({ ui_location: '8080', custom_url: 'https://custom.example.com' }),
+      { uiLocation: '8080', customUrl: 'https://custom.example.com' }
+    )
+  })
+
   test('GitOps/external services are flagged as externally provisioned', ({ assert }) => {
     assert.isTrue(isExternallyProvisioned({ integration: integration({ provisioner: 'gitops' }) }))
-    assert.isTrue(isExternallyProvisioned({ integration: integration({ provisioner: 'external' }) }))
+    assert.isTrue(
+      isExternallyProvisioned({ integration: integration({ provisioner: 'external' }) })
+    )
     assert.isFalse(
       isExternallyProvisioned({ integration: integration({ provisioner: 'nomad-docker' }) })
     )
@@ -74,7 +106,9 @@ test.group('frontend service capability selector', () => {
     assert.isFalse(hasNoWorkloadControls({}))
   })
 
-  test('provisioner notices explain ownership, and are absent for managed services', ({ assert }) => {
+  test('provisioner notices explain ownership, and are absent for managed services', ({
+    assert,
+  }) => {
     assert.match(
       provisionerNotice({ integration: integration({ provisioner: 'gitops' }) }) ?? '',
       /cluster/i
