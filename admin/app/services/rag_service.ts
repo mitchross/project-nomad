@@ -631,6 +631,15 @@ export class RagService {
     } catch (error) {
       console.error(error)
       logger.error('[RAG] Error embedding text:', error)
+
+      // Configuration mismatches are deliberately fatal and carry the
+      // operator-facing remediation message. Preserve the typed error so the
+      // queue job can convert it to UnrecoverableError instead of retrying a
+      // deterministic failure with a generic message.
+      if (error instanceof EmbeddingIdentityMismatchError) {
+        throw error
+      }
+
       return null
     }
   }

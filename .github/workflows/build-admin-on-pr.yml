@@ -42,6 +42,7 @@ jobs:
           --files service_capabilities_selector
           --files llm_config_precedence
           --files embedding_fingerprint
+          --files embedding_error_propagation
           --files embedding_admission
           --force-exit
         working-directory: ./admin
