@@ -1014,6 +1014,14 @@ export class RagService {
       return await this.embedTextAndCleanup(extractedText, filepath, deleteAfterEmbedding, scaledProgress, collection)
     } catch (error) {
       logger.error('[RAG] Error processing and embedding file:', error)
+
+      // Keep configuration mismatches typed through the orchestration layer;
+      // EmbedFileJob uses this type to stop retries and retain the actionable
+      // remediation message for operators.
+      if (error instanceof EmbeddingIdentityMismatchError) {
+        throw error
+      }
+
       return { success: false, message: 'Error processing and embedding file.' }
     }
   }
