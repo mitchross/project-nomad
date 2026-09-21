@@ -7,7 +7,8 @@ import Map, {
   MapProvider,
 } from 'react-map-gl/maplibre'
 import type { MapRef, MapLayerMouseEvent } from 'react-map-gl/maplibre'
-import maplibregl from 'maplibre-gl'
+// MapLibre 6 dropped its default export; the namespace import is the supported form.
+import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 import { Protocol } from 'pmtiles'
