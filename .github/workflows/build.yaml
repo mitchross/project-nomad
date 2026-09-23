@@ -13,6 +13,11 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: mitchross/project-nomad
 
+# Main builds pick the next version from the registry; serialize so two runs can't claim the same one.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -34,6 +39,24 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Compute next version from registry
+      id: ver
+      if: github.ref == 'refs/heads/main'
+      run: |
+        set -euo pipefail
+        TOKEN=$(curl -fsS "https://${REGISTRY}/token?scope=repository:${IMAGE_NAME}:pull" | jq -r .token)
+        # Fail closed: an empty listing would restart at v2.0.0 and overwrite a published tag.
+        TAGS=$(curl -fsS -H "Authorization: Bearer $TOKEN" "https://${REGISTRY}/v2/${IMAGE_NAME}/tags/list" | jq -er '.tags[]')
+        LATEST=$(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' <<<"$TAGS" | sort -V | tail -1 || true)
+        if [ -z "$LATEST" ]; then
+          NEXT="v2.0.0"
+        else
+          IFS=. read -r MAJOR MINOR PATCH <<<"${LATEST#v}"
+          NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+        fi
+        echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+        echo "Calculated version: $NEXT"
+
     - name: Extract metadata
       id: meta
       uses: docker/metadata-action@v5
@@ -46,6 +69,7 @@ jobs:
           type=semver,pattern={{major}}.{{minor}}
           type=sha,prefix=sha-
           type=raw,value=main,enable={{is_default_branch}}
+          type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.ref == 'refs/heads/main' }}
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
